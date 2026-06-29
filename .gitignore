@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Project specific
+output/
+*.log
+_env_tmp.txt
+_cleanup_trash
+
+# Environment
+.env
+
+# Rust (byou_rust)
+target/
+Cargo.lock
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+
+# nul file (Windows reserved name - should not be committed)
+nul
+
+# Large model files
+*.gguf
+models/*.gguf

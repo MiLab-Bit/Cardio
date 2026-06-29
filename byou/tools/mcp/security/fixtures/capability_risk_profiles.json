@@ -1,0 +1,110 @@
+{
+  "_description": "Capability Risk Profile 默认映射",
+  "_note": "与 types.py 中 CapabilityRiskProfile.default_risk_map() 保持同步",
+  "profiles": {
+    "company_lookup": {
+      "capability": "company_lookup",
+      "risk_level": "low",
+      "default_approval": "none",
+      "requires_sandbox": false,
+      "requires_audit": false,
+      "allow_in_untrusted_context": true
+    },
+    "equity_analysis": {
+      "capability": "equity_analysis",
+      "risk_level": "low",
+      "default_approval": "none",
+      "requires_sandbox": false,
+      "requires_audit": false,
+      "allow_in_untrusted_context": true
+    },
+    "risk_assessment": {
+      "capability": "risk_assessment",
+      "risk_level": "low",
+      "default_approval": "none",
+      "requires_sandbox": false,
+      "requires_audit": false,
+      "allow_in_untrusted_context": true
+    },
+    "web_search": {
+      "capability": "web_search",
+      "risk_level": "medium",
+      "default_approval": "log_only",
+      "requires_sandbox": false,
+      "requires_audit": false,
+      "allow_in_untrusted_context": true
+    },
+    "people_search": {
+      "capability": "people_search",
+      "risk_level": "medium",
+      "default_approval": "log_only",
+      "requires_sandbox": false,
+      "requires_audit": false,
+      "allow_in_untrusted_context": true
+    },
+    "document_ocr": {
+      "capability": "document_ocr",
+      "risk_level": "medium",
+      "default_approval": "log_only",
+      "requires_sandbox": false,
+      "requires_audit": false,
+      "allow_in_untrusted_context": true
+    },
+    "vector_search": {
+      "capability": "vector_search",
+      "risk_level": "low",
+      "default_approval": "none",
+      "requires_sandbox": false,
+      "requires_audit": false,
+      "allow_in_untrusted_context": true
+    },
+    "data_enrich": {
+      "capability": "data_enrich",
+      "risk_level": "low",
+      "default_approval": "none",
+      "requires_sandbox": false,
+      "requires_audit": false,
+      "allow_in_untrusted_context": true
+    },
+    "browser_automate": {
+      "capability": "browser_automate",
+      "risk_level": "high",
+      "default_approval": "auto_approve",
+      "requires_sandbox": true,
+      "requires_audit": false,
+      "allow_in_untrusted_context": false
+    },
+    "crm_read": {
+      "capability": "crm_read",
+      "risk_level": "medium",
+      "default_approval": "auto_approve",
+      "requires_sandbox": false,
+      "requires_audit": false,
+      "allow_in_untrusted_context": false
+    },
+    "crm_write": {
+      "capability": "crm_write",
+      "risk_level": "high",
+      "default_approval": "human_required",
+      "requires_sandbox": false,
+      "requires_audit": true,
+      "allow_in_untrusted_context": false
+    },
+    "email_read": {
+      "capability": "email_read",
+      "risk_level": "high",
+      "default_approval": "log_only",
+      "requires_sandbox": false,
+      "requires_audit": false,
+      "allow_in_untrusted_context": false
+    },
+    "email_send": {
+      "capability": "email_send",
+      "risk_level": "critical",
+      "default_approval": "human_required",
+      "requires_sandbox": false,
+      "requires_audit": true,
+      "allow_in_untrusted_context": false
+    }
+  }
+}

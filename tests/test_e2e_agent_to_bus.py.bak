@@ -1,0 +1,59 @@
+"""全链路: Agent → ToolBus → Registry → Error"""
+import sys
+sys.path.insert(0, r"Z:\Dev\Byou")
+import asyncio
+from byou.tools.mcp import *
+from byou.agents.base import Agent
+
+
+async def main():
+    # 构建 ToolBus
+    reg = ToolRegistry()
+    reg.register(MCPToolDescriptor(
+        name="tianyancha.baseinfo",
+        display_name="天眼查",
+        category=ToolCategory.BUSINESS_DATA,
+        capabilities=[ToolCapability.COMPANY_LOOKUP],
+        server_name="tianyancha",
+        provider="tianyancha",
+        priority=10,
+    ))
+    reg.grant_agent("researcher", {ToolCapability.COMPANY_LOOKUP})
+
+    bus = ToolBus(registry=reg)
+
+    # 创建 Agent 并绑定
+    class TestAgent(Agent):
+        def _default_prompt(self):
+            return "test"
+
+        async def execute(self, input_data):
+            return {}
+
+    agent = TestAgent(name="researcher")
+    agent.bind_tools(bus)
+
+    print(f"agent name: {agent.name}")
+    print(f"has_tools: {agent.has_tools}")
+
+    # Agent 按 capability 声明式调用
+    # 天眼查接入前 _call_tianyancha 是 NotImplemented → 预期 MCPToolError 或 NotImplementedError
+    try:
+        result = await agent.call_tool(
+            ToolCapability.COMPANY_LOOKUP,
+            {"company_name": "阿里巴巴"},
+        )
+        print(f"unexpected success: {result}")
+    except MCPToolError as e:
+        print(f"expected MCPToolError: category={e.category.value} msg={e.message[:80]}...")
+        print(f"retryable={e.retryable} backoff={e.suggested_backoff_ms}ms")
+        print(f"\nto_dict: {e.to_dict()}")
+    except NotImplementedError as e:
+        print(f"expected NotImplementedError (天眼查接入待定): {e}")
+        print("This is expected — HTTP call not implemented until Tianyancha integration.")
+        print("Agent → ToolBus → Registry → Policy → Call chain is intact.")
+
+    print("\n=== Agent → ToolBus → Registry → Error 全链路 OK ===")
+
+
+asyncio.run(main())

@@ -1,0 +1,21 @@
+[package]
+name = "byou_rust"
+version = "0.1.0"
+edition = "2021"
+authors = ["Byou Team"]
+
+[lib]
+name = "_byou_rust"
+crate-type = ["cdylib"]   # PyO3: compile as Python extension
+
+[dependencies]
+pyo3 = { version = "0.21", features = ["auto-initialize"] }
+regex = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[build-dependencies]
+pyo3-build-config = "0.21"
+
+# Development: `maturin develop --release` to compile + install in-place
+# Release:   `maturin build --release` to build wheel

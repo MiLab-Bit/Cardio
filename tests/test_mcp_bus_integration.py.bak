@@ -1,0 +1,334 @@
+"""MCP Tool Bus: 端到端集成测试 — Agent → ToolBus → Registry → Policy 全链路。
+
+验证:
+1. ToolBus 构建 + Registry 注册 + Policy 绑定
+2. Agent 绑定 ToolBus
+3. Agent 按 capability 声明式调用
+4. 错误映射 + 熔断
+5. ToolBus 内部 `call` 方法在 天眼查接入前正确降级
+
+Note: 天眼查 HTTP 接入后，替换 mock_call_fn 为实际 HTTP 调用。
+"""
+
+import sys
+sys.path.insert(0, r"Z:\Dev\Byou")
+
+import asyncio
+from unittest.mock import AsyncMock, patch
+
+from byou.tools.mcp import (
+    ToolBus, ToolRegistry, PolicyEngine, AuthProvider, MCPClientManager,
+    MCPToolDescriptor, MCPToolParameter, MCPToolCallRequest, MCPToolCallResult,
+    MCPInvocationPolicy, MCPToolError,
+    ToolCapability, ToolCategory, ErrorCategory, RetryStrategy,
+)
+from byou.agents.base import Agent
+
+
+# ── Test helpers ──────────────────────────────────
+
+def build_test_bus() -> ToolBus:
+    """构建测试 ToolBus: 注册天眼查+企查查+搜索工具"""
+    reg = ToolRegistry()
+    pe = PolicyEngine()
+
+    # 天眼查: 工商信息
+    baseinfo = MCPToolDescriptor(
+        name="tianyancha.baseinfo",
+        display_name="天眼查-工商基础信息",
+        description="查询企业工商基础信息: 注册资本/法人/经营状态/经营范围",
+        category=ToolCategory.BUSINESS_DATA,
+        capabilities=[ToolCapability.COMPANY_LOOKUP],
+        server_name="tianyancha",
+        provider="tianyancha",
+        priority=10,
+        timeout_ms=15_000,
+        rate_limit_per_minute=300,
+        parameters=[
+            MCPToolParameter(name="company_name", type="string", required=True, description="公司名称"),
+        ],
+    )
+
+    # 天眼查: 股权
+    equity = MCPToolDescriptor(
+        name="tianyancha.equity",
+        display_name="天眼查-股权穿透",
+        description="查询企业股权结构/实际控制人",
+        category=ToolCategory.BUSINESS_DATA,
+        capabilities=[ToolCapability.EQUITY_ANALYSIS],
+        server_name="tianyancha",
+        provider="tianyancha",
+        priority=10,
+        timeout_ms=20_000,
+        parameters=[
+            MCPToolParameter(name="company_id", type="integer", required=True, description="公司ID"),
+        ],
+    )
+
+    # 天眼查: 风险
+    risk = MCPToolDescriptor(
+        name="tianyancha.court_notices",
+        display_name="天眼查-司法风险",
+        description="查询企业司法风险: 裁判文书/开庭公告/失信/被执行",
+        category=ToolCategory.BUSINESS_DATA,
+        capabilities=[ToolCapability.RISK_ASSESSMENT],
+        server_name="tianyancha",
+        provider="tianyancha",
+        priority=10,
+        timeout_ms=20_000,
+    )
+
+    # 企查查: 工商信息 (fallback)
+    qcc = MCPToolDescriptor(
+        name="qichacha.baseinfo",
+        display_name="企查查-工商基础信息",
+        description="查询企业工商基础信息",
+        category=ToolCategory.BUSINESS_DATA,
+        capabilities=[ToolCapability.COMPANY_LOOKUP],
+        server_name="qichacha",
+        provider="qichacha",
+        priority=7,  # 低优先级
+        timeout_ms=10_000,
+    )
+
+    for tool, pol in [
+        (baseinfo, MCPInvocationPolicy(tool_name="tianyancha.baseinfo", max_retries=1, circuit_breaker_threshold=3)),
+        (equity, MCPInvocationPolicy(tool_name="tianyancha.equity", max_retries=1)),
+        (risk, MCPInvocationPolicy(tool_name="tianyancha.court_notices", max_retries=2)),
+        (qcc, MCPInvocationPolicy(tool_name="qichacha.baseinfo", max_retries=1)),
+    ]:
+        reg.register(tool)
+        pe.register_policy(pol)
+
+    # 授权
+    reg.grant_agent("researcher", {
+        ToolCapability.COMPANY_LOOKUP,
+        ToolCapability.EQUITY_ANALYSIS,
+        ToolCapability.RISK_ASSESSMENT,
+        ToolCapability.WEB_SEARCH,
+    })
+
+    return ToolBus(registry=reg, policy_engine=pe)
+
+
+class MockAgent(Agent):
+    """For testing only"""
+    def _default_prompt(self) -> str:
+        return "test"
+    async def execute(self, input_data):
+        return {}
+
+
+# ── Tests ─────────────────────────────────────────
+
+async def test_registry_capability_lookup():
+    """Agent 按能力发现工具 — 不写死工具名"""
+    bus = build_test_bus()
+
+    tools = bus.registry.find_by_capability(ToolCapability.COMPANY_LOOKUP)
+    assert len(tools) == 2, f"Expected 2, got {len(tools)}"
+    # 优先级排序: tianyancha(10) > qichacha(7)
+    assert tools[0].name == "tianyancha.baseinfo"
+    assert tools[1].name == "qichacha.baseinfo"
+    print("[PASS] capability lookup")
+
+
+async def test_best_tool_selection():
+    """get_best_tool 返回优先级最高的"""
+    bus = build_test_bus()
+    best = bus.registry.get_best_tool(ToolCapability.COMPANY_LOOKUP)
+    assert best.name == "tianyancha.baseinfo"
+    print("[PASS] best tool selection")
+
+
+async def test_agent_permission_denied():
+    """未授权 Agent 调用被拒绝"""
+    bus = build_test_bus()
+    agent = MockAgent(name="strategist")
+    agent.bind_tools(bus)
+
+    # strategist 未授予任何 capability → 默认拒绝
+    assert not bus.registry.agent_can_use("strategist", ToolCapability.COMPANY_LOOKUP)
+    print("[PASS] agent permission denied")
+
+
+async def test_agent_permission_granted():
+    """已授权 Agent 通过权限检查"""
+    bus = build_test_bus()
+    agent = MockAgent(name="researcher")
+    agent.bind_tools(bus)
+
+    assert bus.registry.agent_can_use("researcher", ToolCapability.COMPANY_LOOKUP)
+    assert bus.registry.agent_can_use("researcher", ToolCapability.RISK_ASSESSMENT)
+    assert not bus.registry.agent_can_use("researcher", ToolCapability.CRM_WRITE)
+    print("[PASS] agent permission granted")
+
+
+async def test_agent_bind_tools():
+    """Agent.bind_tools 正确注入"""
+    bus = build_test_bus()
+    agent = MockAgent(name="test_agent")
+    assert not agent.has_tools
+
+    agent.bind_tools(bus)
+    assert agent.has_tools
+    print("[PASS] agent bind tools")
+
+
+async def test_tool_disable_enable():
+    """动态启停"""
+    bus = build_test_bus()
+    bus.registry.disable("tianyancha.baseinfo")
+
+    enabled = bus.registry.find_by_capability(ToolCapability.COMPANY_LOOKUP)
+    assert len(enabled) == 1
+    assert enabled[0].name == "qichacha.baseinfo"  # fallback kicked in
+
+    bus.registry.enable("tianyancha.baseinfo")
+    enabled = bus.registry.find_by_capability(ToolCapability.COMPANY_LOOKUP)
+    assert len(enabled) == 2
+    print("[PASS] dynamic disable/enable")
+
+
+async def test_circuit_breaker():
+    """熔断器: 连续失败 N 次 → OPEN → 拒绝调用"""
+    from byou.tools.mcp.policies import CircuitBreaker, CircuitState
+
+    cb = CircuitBreaker("test", threshold=3, recovery_ms=100_000)
+    assert cb.allow_call()
+
+    for _ in range(3):
+        cb.on_failure()
+    assert cb.state == CircuitState.OPEN
+    assert not cb.allow_call()
+    print("[PASS] circuit breaker")
+
+
+async def test_error_mapping():
+    """异常 → 结构化错误"""
+    from byou.tools.mcp.errors import map_error
+
+    cases = [
+        (Exception("TooManyRequests: 429"), ErrorCategory.RATE_LIMIT, True),
+        (Exception("Unauthorized: 401"), ErrorCategory.AUTH, False),
+        (Exception("Connection timeout"), ErrorCategory.TIMEOUT, True),
+        (Exception("Not Found: 404"), ErrorCategory.NOT_FOUND, False),
+    ]
+
+    for exc, expected_cat, expected_retry in cases:
+        err = map_error("test.tool", exc)
+        assert err.category == expected_cat, f"{exc}: expected {expected_cat}, got {err.category}"
+        assert err.retryable == expected_retry
+    print("[PASS] error mapping")
+
+
+async def test_registry_unregister():
+    """注销工具清理索引"""
+    bus = build_test_bus()
+    assert bus.registry.tool_count == 4
+
+    bus.registry.unregister("qichacha.baseinfo")
+    assert bus.registry.tool_count == 3
+    assert bus.registry.get("qichacha.baseinfo") is None
+
+    tools = bus.registry.find_by_capability(ToolCapability.COMPANY_LOOKUP)
+    assert len(tools) == 1
+    print("[PASS] unregister + index cleanup")
+
+
+async def test_bus_register_tool_dsl():
+    """ToolBus.register_tool 一步注册 + 绑定策略"""
+    bus = build_test_bus()
+    new_tool = MCPToolDescriptor(
+        name="websearch.bing",
+        capabilities=[ToolCapability.WEB_SEARCH],
+        category=ToolCategory.WEB_SEARCH,
+        server_name="websearch",
+        provider="bing",
+        priority=8,
+    )
+    bus.register_tool(new_tool)
+
+    assert bus.registry.get("websearch.bing") is not None
+    assert bus._policies.get_policy("websearch.bing") is not None
+    # 自动生成的策略取了 descriptor 的默认值
+    pol = bus._policies.get_policy("websearch.bing")
+    assert pol.max_timeout_ms == new_tool.timeout_ms
+    print("[PASS] bus.register_tool DSL")
+
+
+async def test_call_not_found():
+    """capability 无对应工具 → MCPToolError"""
+    bus = build_test_bus()
+    agent = MockAgent(name="admin")
+    agent.bind_tools(bus)
+
+    try:
+        await bus.call(
+            capability=ToolCapability.BROWSER_AUTOMATE,
+            arguments={"url": "https://example.com"},
+            caller="admin",
+        )
+        assert False, "Should have raised"
+    except MCPToolError as e:
+        assert "No tool registered" in e.message
+    print("[PASS] call not found → MCPToolError")
+
+
+async def test_call_permission_denied():
+    """已绑定但未授权 → 权限拒绝"""
+    bus = build_test_bus()
+    agent = MockAgent(name="extractor")
+    agent.bind_tools(bus)
+
+    # extractor 未授权 COMPANY_LOOKUP
+    try:
+        await bus.call(
+            capability=ToolCapability.COMPANY_LOOKUP,
+            arguments={"company_name": "test"},
+            caller="extractor",
+        )
+        assert False, "Should have raised"
+    except MCPToolError as e:
+        assert "not authorized" in e.message.lower()
+    print("[PASS] permission denied → MCPToolError")
+
+
+# ── Runner ────────────────────────────────────────
+
+async def main():
+    tests = [
+        test_registry_capability_lookup,
+        test_best_tool_selection,
+        test_agent_permission_denied,
+        test_agent_permission_granted,
+        test_agent_bind_tools,
+        test_tool_disable_enable,
+        test_circuit_breaker,
+        test_error_mapping,
+        test_registry_unregister,
+        test_bus_register_tool_dsl,
+        test_call_not_found,
+        test_call_permission_denied,
+    ]
+
+    passed = 0
+    failed = 0
+    for fn in tests:
+        try:
+            await fn()
+            passed += 1
+        except Exception as e:
+            print(f"[FAIL] {fn.__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            failed += 1
+
+    print(f"\n{'='*50}")
+    print(f"Results: {passed} passed, {failed} failed, {len(tests)} total")
+    if failed:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

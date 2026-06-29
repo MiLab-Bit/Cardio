@@ -1,0 +1,53 @@
+"""横切治理编译 & 冒烟测试"""
+import sys
+sys.path.insert(0, r"Z:\Dev\Byou")
+
+from byou.production import *
+from byou.production.types import *
+
+# 日志
+log = get_logger()
+log.info("Logger OK", stage="test")
+
+# Metrics
+m = get_metrics()
+m.pipelines_total.inc({"status": "success"})
+status_key = "status"
+count = m.pipelines_total.get({status_key: "success"})
+print(f"Metrics OK: pipelines_total={count}")
+
+# Health
+h = get_health()
+print(f"HealthManager OK: {type(h).__name__}")
+
+# Shutdown
+sd = get_shutdown()
+print(f"Shutdown OK: {type(sd).__name__} timeout={sd.timeout_s}s")
+
+# Reliability
+from byou.production.reliability import StageGuard, PersistenceGuard
+print("StageGuard OK, PersistenceGuard OK")
+
+# Tracer
+tracer = get_tracer()
+print(f"Tracer OK: {type(tracer).__name__}")
+
+# Config guard
+g = get_config_guard()
+deps = g.check_deps()
+req_ok = [d for d in deps if not d.optional and d.available]
+total_req = len([d for d in deps if not d.optional])
+print(f"Config Guard OK: {len(req_ok)}/{total_req} required deps available")
+env_result = g.validate_env()
+print(f"Env validation: valid={env_result.valid}, errors={len(env_result.errors)}, warnings={len(env_result.warnings)}")
+
+# Evaluation (moved to byou.evals — use EvalRunner instead)
+
+# Tracing
+from byou.production.tracing import PipelineTracer
+pt = PipelineTracer("run_test", "trace_test")
+pt.record_tool_call("test_tool", "TEST_CAP", 123.4, "success")
+spans = pt.finish()
+print(f"PipelineTracer OK: {len(spans)} spans")
+
+print("\n>>> ALL PRODUCTION MODULES OK <<<")

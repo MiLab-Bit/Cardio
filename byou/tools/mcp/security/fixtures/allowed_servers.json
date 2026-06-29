@@ -1,0 +1,32 @@
+{
+  "_description": "已知安全的 MCP Server 白名单",
+  "servers": [
+    {
+      "server_name": "tianyancha",
+      "reason": "天眼查官方 API",
+      "url": "https://open.tianyancha.com",
+      "trust_level": "full",
+      "risk_level": "low",
+      "audit_date": "2026-06-27",
+      "score": 95
+    },
+    {
+      "server_name": "qichacha",
+      "reason": "企查查官方 API (备选)",
+      "url": "https://api.qcc.com",
+      "trust_level": "full",
+      "risk_level": "low",
+      "audit_date": "2026-06-27",
+      "score": 90
+    },
+    {
+      "server_name": "chroma_vector",
+      "reason": "内部 ChromaDB 向量存储",
+      "url": "internal",
+      "trust_level": "full",
+      "risk_level": "low",
+      "audit_date": "2026-06-27",
+      "score": 100
+    }
+  ]
+}

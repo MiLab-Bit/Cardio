@@ -1,0 +1,25 @@
+# Byou dependencies
+# Core
+fastapi>=0.100.0
+uvicorn>=0.20.0
+httpx>=0.24.0
+openai>=1.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# CLI
+click>=8.1.0
+rich>=13.0.0
+
+# Infrastructure (optional, graceful degradation)
+chromadb>=0.4.0
+networkx>=3.0
+
+# OCR / ASR (optional)
+pytesseract>=0.3.10
+Pillow>=10.0.0
+openai-whisper>=20231117
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0

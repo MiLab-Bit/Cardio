@@ -1,0 +1,89 @@
+"""
+CUA Runtime 测试
+"""
+
+import pytest
+import asyncio
+
+from byou.core.runtime import CuaRuntime, CuaTask, ExecutionStatus
+
+
+@pytest.mark.asyncio
+async def test_cua_initialization():
+    """测试 CUA Runtime 初始化"""
+    runtime = CuaRuntime()
+    assert runtime.perception is not None
+    assert runtime.semantic_align is not None
+    assert runtime.state_modeling is not None
+    assert runtime.planning is not None
+    assert runtime.execution is not None
+    assert runtime.validation is not None
+
+
+@pytest.mark.asyncio
+async def test_execute_simple_task():
+    """测试执行简单任务"""
+    runtime = CuaRuntime()
+    task = CuaTask(
+        id="test_001",
+        description="搜索公司信息",
+        target_url="https://example.com",
+        actions=[
+            {"type": "navigate", "target": "https://example.com"},
+            {"type": "click", "target": "#search"},
+        ],
+    )
+
+    result = await runtime.execute_task(task)
+    assert result.status == ExecutionStatus.SUCCESS
+    assert result.result is not None
+    assert "execution" in result.result
+    assert "validation" in result.result
+
+
+@pytest.mark.asyncio
+async def test_execute_task_without_actions():
+    """测试无具体动作的任务"""
+    runtime = CuaRuntime()
+    task = CuaTask(
+        id="test_002",
+        description="简单等待任务",
+        target_url="https://example.com",
+    )
+
+    result = await runtime.execute_task(task)
+    assert result.status == ExecutionStatus.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_get_task_status():
+    """测试获取任务状态"""
+    runtime = CuaRuntime()
+    task = CuaTask(id="test_003", description="测试")
+    await runtime.execute_task(task)
+
+    status = runtime.get_task_status("test_003")
+    assert status == ExecutionStatus.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_get_nonexistent_task():
+    """测试获取不存在的任务"""
+    runtime = CuaRuntime()
+    assert runtime.get_task_status("nonexistent") is None
+
+
+@pytest.mark.asyncio
+async def test_retry_nonexistent_task():
+    """测试重试不存在的任务"""
+    runtime = CuaRuntime()
+    result = await runtime.retry_task("nonexistent")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown():
+    """测试关闭"""
+    runtime = CuaRuntime()
+    await runtime.shutdown()
+    assert len(runtime._active_tasks) == 0

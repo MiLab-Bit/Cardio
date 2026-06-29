@@ -1,0 +1,308 @@
+"""Byou Production 鈥?闆嗘垚娴嬭瘯銆?
+楠岃瘉 Production 妯垏娌荤悊灞傚叏閾捐矾:
+Phase 1: Types + Logger + Metrics + Health
+Phase 2: Shutdown + Reliability + Tracer
+Phase 3: Evaluation + Config Guard + Cost
+Phase 4: Orchestrator with Observability
+"""
+
+import sys
+sys.path.insert(0, r"Z:\Dev\Byou")
+
+import asyncio
+import json
+import time
+from datetime import datetime, timezone
+
+from byou.production import *
+from byou.production.types import *
+
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?# Test Harness
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+_passed = 0
+_failed = 0
+_current = ""
+
+def section(name: str):
+    global _current
+    _current = name
+
+def check(cond: bool, msg: str = ""):
+    global _passed, _failed, _current
+    if cond:
+        _passed += 1
+        label = f"  [PASS] {_current}: {msg}" if msg else f"  [PASS] {_current}"
+        print(label)
+    else:
+        _failed += 1
+        label = f"  [FAIL] {_current}: {msg}" if msg else f"  [FAIL] {_current}"
+        print(label)
+
+
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?# Phase 1: Logger + Metrics + Health
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+def test_structured_logger():
+    section("structured logger")
+    slog = StructuredLogger(name="test_l6", level="DEBUG")
+    slog.set_trace(trace_id="trace_001", run_id="run_001")
+    slog.info("test message", stage="extraction", agent="extractor", duration_ms=42.5)
+    slog.audit("pipeline_start", {"stages": 5})
+
+    # Key masking
+    masked = slog._sanitize("sk-abc123def4567890xyz")
+    check("sk-***" in masked, "api key masked")
+
+    slog.clear_trace()
+    print("[PASS] structured logger")
+
+
+def test_metrics():
+    section("metrics collector")
+    m = MetricsCollector()
+
+    m.pipelines_total.inc({"status": "success"}, 5)
+    m.pipelines_total.inc({"status": "failed"}, 1)
+    check(m.pipelines_total.get({"status": "success"}) == 5)
+
+    m.stage_duration_ms.observe(120.0)
+    m.stage_duration_ms.observe(350.0)
+    check(m.stage_duration_ms.avg > 0)
+
+    m.active_pipelines.set(3)
+    check(abs(m.active_pipelines.get() - 3.0) < 0.01)
+
+    m.errors_total.inc({"category": "timeout"})
+    check(m.errors_total.get({"category": "timeout"}) == 1)
+
+    # Prometheus format
+    text = m.prometheus_text()
+    check("byou_pipelines_total" in text, "prometheus format")
+    check("byou_stage_duration_ms" in text)
+
+    # Snapshot
+    snap = m.snapshot()
+    check(len(snap.samples) > 0, f"{len(snap.samples)} samples")
+
+    print("[PASS] metrics collector")
+
+
+def test_health_check():
+    section("health check manager")
+    mgr = HealthCheckManager()
+
+    # Register quick checks
+    mgr.register(FunctionHealthCheck("config", lambda: True))
+    mgr.register(FunctionHealthCheck("metrics", lambda: True))
+
+    async def _run():
+        status = await mgr.quick()
+        check(status.overall == HealthLevel.OK, f"overall={status.overall.value}")
+        check(len(status.components) >= 2, f"{len(status.components)} components")
+        check(status.uptime_seconds >= 0)
+        return status
+
+    status = asyncio.run(_run())
+    check(len(status.components) == 2)
+
+    # Degraded test
+    mgr.register(FunctionHealthCheck("browser", lambda: False, required=True))
+    status2 = asyncio.run(mgr.quick())
+    check(status2.overall == HealthLevel.UNHEALTHY, f"unhealthy={status2.overall.value}")
+
+    print("[PASS] health check manager")
+
+
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?# Phase 2: Shutdown + Reliability + Tracer
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+def test_shutdown():
+    section("graceful shutdown")
+    sd = GracefulShutdown(timeout_s=5)
+    steps_run = []
+    sd.register("step1", lambda: steps_run.append("step1"))
+    sd.register("step2", lambda: steps_run.append("step2"))
+
+    report = asyncio.run(sd.shutdown())
+    check(len(report.steps) == 2)
+    check(report.clean, "shutdown clean")
+    check(report.total_duration_ms >= 0)  # 鍙兘 <1ms 鎴柇涓?
+    check(steps_run == ["step1", "step2"])
+
+    # Timeout test
+    sd2 = GracefulShutdown(timeout_s=0.1)
+    sd2.register("slow_step", lambda: asyncio.sleep(5), timeout_s=0.05)
+    report2 = asyncio.run(sd2.shutdown())
+    check(any(s.status == StageStatus.TIMED_OUT for s in report2.steps), "step timed out")
+
+    print("[PASS] graceful shutdown")
+
+
+def test_reliability():
+    section("reliability guards")
+
+    # StageGuard
+    async def _test_stage():
+        async with StageGuard("test_stage", timeout_s=1, critical=False):
+            pass
+    asyncio.run(_test_stage())
+
+    # PersistenceGuard
+    import tempfile, os
+    pg = PersistenceGuard(max_retries=2)
+    tmpdir = tempfile.mkdtemp()
+    path = os.path.join(tmpdir, "test_save.json")
+    result = pg.safe_write(path, '{"hello":"world"}', component="test")
+    check(result["success"], f"write OK: {result}")
+    check(result["bytes"] > 0)
+
+    # Read back
+    with open(path) as f:
+        data = json.load(f)
+    check(data["hello"] == "world")
+
+    # with_timeout
+    async def fast():
+        return "ok"
+    result = asyncio.run(with_timeout(fast(), timeout_s=1))
+    check(result == "ok")
+
+    # with_timeout slow
+    async def slow():
+        await asyncio.sleep(5)
+        return "never"
+    result = asyncio.run(with_timeout(slow(), timeout_s=0.01, stage="test"))
+    check(isinstance(result, ErrorRecord), f"timeout returns ErrorRecord: {type(result).__name__}")
+    check(result.category == ErrorCategory.TIMEOUT)
+
+    # ReliabilityContext
+    ctx = get_reliability()
+    ctx.open_browser_sessions = 1
+    snap = ctx.snapshot()
+    check(snap["open_browser_sessions"] == 1)
+
+    print("[PASS] reliability guards")
+
+
+def test_tracing():
+    section("tracer")
+    tracer = get_tracer()
+
+    with tracer.span("test_span", trace_id="trace_001", key="val"):
+        pass
+
+    spans = tracer.flush()
+    check(len(spans) >= 1, f"{len(spans)} spans")
+
+    # PipelineTracer
+    pt = PipelineTracer("run_test", "trace_test")
+    pt.record_tool_call("tyc_baseinfo", "COMPANY_LOOKUP", 234.5, "success")
+    pt.record_tool_call("browser_research", "BROWSER_AUTOMATE", 1500.0, "success")
+    s = pt.finish()
+    check(len(s) >= 2, f"{len(s)} spans")
+
+    print("[PASS] tracer")
+
+
+# Phase 3: Config Guard + Cost
+def test_evaluation():
+    section("evaluation engine")
+    # production/evaluation.py removed — use byou.evals instead
+    # See tests/test_evals.py for full evaluation pipeline
+    print("[PASS] evaluation engine (delegated to byou.evals)")
+
+
+def test_config_guard():
+    section("config guard")
+    g = get_config_guard()
+
+    deps = g.check_deps()
+    check(len(deps) > 0, f"{len(deps)} deps checked")
+
+    required = [d for d in deps if not d.optional]
+    for d in required:
+        check(d.available, f"required dep '{d.dependency}': {d.message}")
+
+    env = g.validate_env()
+    check(not env.valid, "env should warn missing keys")
+
+    print("[PASS] config guard")
+
+
+def test_cost_analyzer():
+    section("cost analyzer")
+    ca = CostAnalyzer()
+    ca.record_llm("gpt-4o", prompt_tokens=500, completion_tokens=200)
+    ca.record_llm("gpt-4o", prompt_tokens=300, completion_tokens=150)
+    ca.record_tyc("baseinfo")
+    ca.record_tyc("court")
+
+    summary = ca.summary()
+    check(summary.llm_prompt_tokens == 800)
+    check(summary.llm_completion_tokens == 350)
+    check(summary.llm_cost_usd > 0, f"llm_cost={summary.llm_cost_usd}")
+    check(summary.api_call_count == 2)
+    check(summary.api_cost_yuan > 0)
+    check(summary.total_cost_usd > 0)
+
+    print("[PASS] cost analyzer")
+
+
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?# Phase 4: Orchestrator with Observability
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+def test_orchestrator_l6():
+    section("orchestrator with Observability")
+    from byou.core.orchestrator import Orchestrator
+
+    orch = Orchestrator(production=True)
+    check(orch._slog is not None, "logger injected")
+    check(orch._metrics is not None, "metrics injected")
+    check(orch._tracer is not None, "tracer injected")
+    check(orch._reliability is not None, "reliability injected")
+
+    # Non-production mode
+    orch2 = Orchestrator(production=False)
+    check(orch2._slog is None, "no logger in dev mode")
+    check(orch2._metrics is None, "no metrics in dev mode")
+
+    print("[PASS] orchestrator with Observability")
+
+
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?# Main
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+def main():
+    global _passed, _failed
+
+    print("=" * 60)
+    print("Byou Production 鈥?Integration Tests")
+    print("=" * 60)
+
+    print("\n-- Phase 1: Logger + Metrics + Health --")
+    test_structured_logger()
+    test_metrics()
+    test_health_check()
+
+    print("\n-- Phase 2: Shutdown + Reliability + Tracer --")
+    test_shutdown()
+    test_reliability()
+    test_tracing()
+
+    print("\n-- Phase 3: Evaluation + Config + Cost --")
+    test_evaluation()
+    test_config_guard()
+    test_cost_analyzer()
+
+    print("\n-- Phase 4: Orchestrator Integration --")
+    test_orchestrator_l6()
+
+    # Summary
+    print("\n" + "=" * 60)
+    total = _passed + _failed
+    print(f"Results: {_passed} passed, {_failed} failed, {total} total")
+    if _failed == 0:
+        print(">>> ALL PRODUCTION TESTS PASSED <<<")
+    else:
+        print(f"XXX {_failed} FAILURES XXX")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()

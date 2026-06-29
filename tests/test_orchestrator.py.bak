@@ -1,0 +1,126 @@
+"""
+Orchestrator 测试
+"""
+
+import pytest
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from byou.core.orchestrator import Orchestrator
+from byou.agents.base import Agent
+
+
+class MockAgent(Agent):
+    """Mock Agent for testing"""
+
+    def __init__(self, name: str, return_value: dict = None):
+        # 跳过 Agent.__init__ 以避免尝试 LLM 调用
+        self.name = name
+        self._return_value = return_value or {"status": "ok"}
+
+    def _default_prompt(self):
+        return f"Mock prompt for {self.name}"
+
+    async def execute(self, input_data: dict) -> dict:
+        return self._return_value
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_initialization():
+    """测试 Orchestrator 初始化"""
+    orch = Orchestrator()
+    assert orch._settings.max_concurrent_agents == 5
+    assert orch.message_bus is not None
+    assert orch.cua_runtime is not None
+    assert orch.learning_loop is not None
+
+
+@pytest.mark.asyncio
+async def test_register_agent():
+    """测试 Agent 注册"""
+    orch = Orchestrator()
+    agent = MockAgent(name="test_agent")
+    orch.register_agent("test_agent", agent)
+    assert orch.get_agent("test_agent") is agent
+
+
+@pytest.mark.asyncio
+async def test_get_nonexistent_agent():
+    """测试获取不存在的 Agent"""
+    orch = Orchestrator()
+    assert orch.get_agent("nonexistent") is None
+
+
+@pytest.mark.asyncio
+async def test_pipeline_with_no_agents():
+    """测试无 Agent 时的 Pipeline"""
+    orch = Orchestrator()
+    result = await orch.process_pipeline(
+        card_image_path=None,
+        audio_file_path=None,
+    )
+    assert result is not None
+    assert result.profile is None
+
+
+@pytest.mark.asyncio
+async def test_pipeline_with_extractor():
+    """测试带 Extractor 的 Pipeline"""
+    orch = Orchestrator()
+    orch.register_agent("extractor", MockAgent("extractor", {
+        "profile": {"name": "测试用户", "company": "测试公司"},
+        "raw_text": "测试文本",
+        "key_points": ["要点1"],
+        "confidence": 0.9,
+    }))
+
+    result = await orch.process_pipeline(
+        card_image_path="/fake/path/card.png",
+    )
+    assert result is not None
+    assert result.raw_extraction is not None
+
+
+@pytest.mark.asyncio
+async def test_pipeline_progress_callback():
+    """测试进度回调"""
+    orch = Orchestrator()
+    progress_stages = []
+
+    def on_progress(stage, data):
+        progress_stages.append(stage)
+
+    result = await orch.process_pipeline(
+        card_image_path=None,
+        on_progress=on_progress,
+    )
+
+    assert "pipeline_start" in progress_stages
+    assert "pipeline_complete" in progress_stages
+
+
+@pytest.mark.asyncio
+async def test_pipeline_error_handling():
+    """测试错误处理"""
+    orch = Orchestrator()
+
+    class FailingMockAgent(Agent):
+        def __init__(self):
+            self.name = "extractor"
+        def _default_prompt(self):
+            return "failing prompt"
+        async def execute(self, input_data: dict) -> dict:
+            raise Exception("Test error")
+
+    orch.register_agent("extractor", FailingMockAgent())
+
+    result = await orch.process_pipeline(card_image_path="/fake/path")
+    assert len(result.errors) > 0
+
+
+@pytest.mark.asyncio
+async def test_shutdown():
+    """测试关闭"""
+    orch = Orchestrator()
+    await orch.shutdown()
+    # 不应抛出异常

@@ -1,0 +1,116 @@
+"""
+Agent 测试
+"""
+
+import pytest
+from unittest.mock import AsyncMock, patch, MagicMock
+
+from byou.agents.base import Agent
+
+
+class ConcreteAgent(Agent):
+    """用于测试的具体 Agent 实现"""
+
+    def _default_prompt(self):
+        return "Test system prompt"
+
+    async def execute(self, input_data: dict) -> dict:
+        result = await self.call_llm([
+            {"role": "user", "content": str(input_data)},
+        ])
+        return {"result": result, "input": input_data}
+
+
+class TestBaseAgent:
+    """BaseAgent 测试"""
+
+    def test_agent_initialization(self):
+        """测试 Agent 初始化"""
+        agent = ConcreteAgent(
+            name="test",
+            model="gpt-4o-mini",
+            temperature=0.3,
+        )
+        assert agent.name == "test"
+        assert agent.model == "gpt-4o-mini"
+        assert agent.temperature == 0.3
+        assert agent.max_retries == 3
+
+    def test_default_prompt(self):
+        """测试默认 Prompt"""
+        agent = ConcreteAgent(name="test")
+        assert agent.system_prompt == "Test system prompt"
+
+    @pytest.mark.asyncio
+    async def test_call_llm_success(self):
+        """测试 LLM 调用成功"""
+        agent = ConcreteAgent(name="test")
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "测试响应"
+
+        with patch.object(agent.client.chat.completions, "create",
+                          new_callable=AsyncMock) as mock_create:
+            mock_create.return_value = mock_response
+
+            result = await agent.call_llm([
+                {"role": "user", "content": "你好"},
+            ])
+            assert result == "测试响应"
+
+    @pytest.mark.asyncio
+    async def test_call_llm_retry(self):
+        """测试 LLM 调用重试"""
+        agent = ConcreteAgent(name="test", max_retries=3)
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "重试后响应"
+
+        # 前两次失败，第三次成功
+        with patch.object(agent.client.chat.completions, "create",
+                          new_callable=AsyncMock) as mock_create:
+            mock_create.side_effect = [
+                Exception("网络错误"),
+                Exception("超时"),
+                mock_response,
+            ]
+
+            result = await agent.call_llm([
+                {"role": "user", "content": "测试"},
+            ])
+            assert result == "重试后响应"
+            assert mock_create.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_call_llm_all_failed(self):
+        """测试 LLM 调用全部失败"""
+        agent = ConcreteAgent(name="test", max_retries=2)
+
+        with patch.object(agent.client.chat.completions, "create",
+                          new_callable=AsyncMock) as mock_create:
+            mock_create.side_effect = Exception("持续错误")
+
+            with pytest.raises(RuntimeError, match="LLM calls exhausted"):
+                await agent.call_llm([
+                    {"role": "user", "content": "测试"},
+                ])
+
+    def test_validate_result_success(self):
+        """测试结果验证成功"""
+        agent = ConcreteAgent(name="test")
+        result = {"name": "张三", "company": "测试公司", "phone": "13800138000"}
+        assert agent.validate_result(result, ["name", "company"])
+
+    def test_validate_result_missing(self):
+        """测试结果验证缺失字段"""
+        agent = ConcreteAgent(name="test")
+        result = {"name": "张三"}
+        assert not agent.validate_result(result, ["name", "company", "phone"])
+
+    def test_repr(self):
+        """测试字符串表示"""
+        agent = ConcreteAgent(name="测试Agent")
+        assert "ConcreteAgent" in repr(agent)
+        assert "测试Agent" in repr(agent)

@@ -1,0 +1,55 @@
+name: default_bd_pipeline
+version: "1.0"
+on_stage_failure: continue  # or "fail_fast"
+max_concurrent: 3
+
+stages:
+  - id: extraction
+    agent_key: extractor
+    label_start: extracting
+    label_done: extraction_done
+    required: true
+    deps: []
+    timeout: 30
+    retry: 2
+
+  - id: research
+    agent_key: researcher
+    label_start: researching
+    label_done: research_done
+    required: false
+    deps:
+      - extraction
+    timeout: 60
+    retry: 1
+
+  - id: synthesis
+    agent_key: synthesizer
+    label_start: synthesizing
+    label_done: synthesis_done
+    required: false
+    deps:
+      - extraction
+      - research
+    timeout: 45
+    retry: 2
+
+  - id: strategy
+    agent_key: strategist
+    label_start: strategizing
+    label_done: strategy_done
+    required: false
+    deps:
+      - synthesis
+    timeout: 60
+    retry: 1
+
+  - id: critique
+    agent_key: critic
+    label_start: critiquing
+    label_done: critique_done
+    required: false
+    deps:
+      - synthesis
+    timeout: 30
+    retry: 1

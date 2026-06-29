@@ -1,0 +1,164 @@
+# tests/intake/test_extraction.py
+"""Extraction orchestration layer tests.
+
+P1 refactored: CardAdapter / VoiceprintAdapter / DiarizationAdapter
+are tested in their own files.  This file tests the orchestration layer
+(ExtractionOrchestrator + IdentityMatcher).
+"""
+
+import pytest
+
+from byou.intake.extraction import ExtractionOrchestrator, IdentityMatcher
+from byou.intake.models import (
+    BusinessCard,
+    PersonCandidate,
+    SpeakerCluster,
+    SpeakerSegment,
+    VoiceprintProfile,
+)
+
+
+# ══════════════════════════════════════════════════════════
+# ExtractionOrchestrator — basic flow
+# ══════════════════════════════════════════════════════════
+
+class TestOrchestrator:
+    def test_extract_cards(self):
+        orch = ExtractionOrchestrator()
+        cards = orch.extract_cards([
+            {"name": "张三", "company": "腾讯"},
+            {"name": "李四", "company": "阿里"},
+        ])
+        assert len(cards) == 2
+        assert isinstance(cards[0], BusinessCard)
+        assert cards[0].name == "张三"
+
+    def test_extract_voiceprints(self):
+        orch = ExtractionOrchestrator()
+        vps = orch.extract_voiceprints([
+            {"embedding": [1.0, 0.0]},
+            {"embedding": [0.0, 1.0]},
+        ])
+        assert len(vps) == 2
+        assert isinstance(vps[0], VoiceprintProfile)
+
+    def test_extract_diarization(self):
+        orch = ExtractionOrchestrator()
+        clusters = orch.extract_diarization({
+            "speakers": [
+                {"speaker": "A", "segments": [{"start": 0, "end": 2, "text": "hi"}]},
+            ]
+        })
+        assert len(clusters) == 1
+        assert isinstance(clusters[0], SpeakerCluster)
+
+    def test_empty_all(self):
+        orch = ExtractionOrchestrator()
+        assert orch.extract_cards([]) == []
+        assert orch.extract_voiceprints([]) == []
+        assert orch.extract_diarization({}) == []
+
+    def test_match_all_basic(self):
+        orch = ExtractionOrchestrator()
+        cards = orch.extract_cards([{"name": "张三", "company": "腾讯"}])
+        vps = orch.extract_voiceprints([
+            {"uid": "uid_001", "embedding": [1.0, 0.5]}
+        ])
+        clusters = orch.extract_diarization(
+            {"speakers": [{"speaker": "A", "segments": []}]}
+        )
+        result = orch.match_all(cards, vps, clusters)
+        assert len(result) >= 1
+        # Voiceprint-only candidate (no graph, so match returns no_match)
+        vp_candidate = [c for c in result if c.voiceprint is not None]
+        assert len(vp_candidate) >= 1
+
+    def test_match_all_empty(self):
+        orch = ExtractionOrchestrator()
+        result = orch.match_all([], [], [])
+        assert result == []
+
+
+# ══════════════════════════════════════════════════════════
+# IdentityMatcher — basic cases
+# ══════════════════════════════════════════════════════════
+
+class TestIdentityMatcherBasic:
+    def test_match_voiceprint_empty_embedding(self):
+        matcher = IdentityMatcher()
+        result = matcher.match_voiceprint([])
+        assert result["uid"] == ""
+        assert result["decision"] == "no_match"
+
+    def test_match_card_empty(self):
+        matcher = IdentityMatcher()
+        card = BusinessCard()
+        result = matcher.match_card_to_identity(card)
+        assert result["uid"] == ""
+        assert result["score"] == 0.0
+
+    def test_build_candidate_card_only(self):
+        matcher = IdentityMatcher()
+        card = BusinessCard(name="张三", company="腾讯")
+        pc = matcher.build_person_candidate(card=card)
+        assert isinstance(pc, PersonCandidate)
+        assert pc.source == "card"
+        assert pc.card.name == "张三"
+        assert pc.requires_review  # no UID match
+
+    def test_build_candidate_voiceprint_only_no_match(self):
+        matcher = IdentityMatcher()
+        vp = VoiceprintProfile(uid="", embedding=[0.1, 0.2, 0.3])
+        vp_match = {"uid": "", "score": 0.0, "candidates": [], "decision": "no_match"}
+        pc = matcher.build_person_candidate(voiceprint=vp, voiceprint_match=vp_match)
+        assert pc.source == "voiceprint"
+        assert pc.requires_review  # no match
+
+    def test_build_candidate_combined_no_conflict(self):
+        matcher = IdentityMatcher()
+        card = BusinessCard(name="张三", company="腾讯")
+        vp = VoiceprintProfile(uid="uid_001", embedding=[0.1, 0.2, 0.3])
+        vp_match = {
+            "uid": "uid_001",
+            "score": 0.9,
+            "candidates": [{"uid": "uid_001", "score": 0.9}],
+            "decision": "auto_match",
+            "requires_review": False,
+        }
+        pc = matcher.build_person_candidate(
+            card=card, voiceprint=vp, voiceprint_match=vp_match
+        )
+        assert pc.source == "card+voiceprint"
+        assert pc.best_match_uid == "uid_001"
+        assert pc.best_match_score == 0.9
+        assert not pc.requires_review
+
+    def test_build_candidate_card_voice_mismatch(self):
+        """Without IdentityGraph, card match returns empty → no conflict.
+
+        This is expected graceful degradation for v1.
+        In production with IdentityGraph, card would match to uid_002 → conflict.
+        """
+        matcher = IdentityMatcher()  # no graph
+        card = BusinessCard(name="李四", company="阿里")
+        vp = VoiceprintProfile(uid="uid_001", embedding=[0.1, 0.2, 0.3])
+        vp_match = {
+            "uid": "uid_001",
+            "score": 0.95,
+            "candidates": [{"uid": "uid_001", "score": 0.95}],
+            "decision": "auto_match",
+            "requires_review": False,
+        }
+        pc = matcher.build_person_candidate(
+            card=card, voiceprint=vp, voiceprint_match=vp_match
+        )
+        assert pc.source == "card+voiceprint"
+        assert pc.best_match_uid == "uid_001"
+
+    def test_build_candidate_no_match_review(self):
+        """Score < 0.5 should set requires_review."""
+        matcher = IdentityMatcher()
+        vp = VoiceprintProfile(uid="", embedding=[0.1, 0.2])
+        vp_match = {"uid": "", "score": 0.0, "candidates": [], "decision": "no_match"}
+        pc = matcher.build_person_candidate(voiceprint=vp, voiceprint_match=vp_match)
+        assert pc.requires_review

@@ -1,0 +1,9 @@
+[
+  {"case": "crash_during_extraction", "description": "Pipeline crashes during extraction — should retry extraction from zero", "run_status": "running", "failed_stage": "extraction", "expected_action": "retry_stage"},
+  {"case": "crash_during_research", "description": "Pipeline crashes during research — recovery from extraction checkpoint", "run_status": "running", "failed_stage": "research", "expected_action": "retry_stage", "available_checkpoint": "extraction"},
+  {"case": "paused_approval", "description": "Pipeline paused waiting for approval — resume after signal", "run_status": "paused", "failed_stage": "strategy", "expected_action": "resume_run", "pause_reason": "Approval pending for BD strategy"},
+  {"case": "waiting_signal_timeout", "description": "Waiting for webhook callback that never arrives — timeout → failed", "run_status": "waiting_signal", "failed_stage": "synthesis", "expected_action": "resume_run", "pause_reason": "Waiting for CRM webhook"},
+  {"case": "max_retries_exceeded", "description": "Stage failed 3 times — no more retries", "run_status": "failed", "failed_stage": "research", "retry_count": 3, "max_retries": 3, "expected_action": "rerun_from_stage"},
+  {"case": "completed_replay", "description": "Completed run — replay for analysis", "run_status": "completed", "expected_action": "replay_run"},
+  {"case": "cancelled_restart", "description": "Cancelled run — restart fresh", "run_status": "cancelled", "expected_action": "restart_run"}
+]
