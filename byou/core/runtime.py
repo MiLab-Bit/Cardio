@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Any, Optional
 
 from byou.core.message_bus import MessageBus
-from byou.infrastructure.browser import BrowserManager
+from byou.cua.browser_manager import BrowserManager
 from byou.cua.perception import PerceptionLayer
 from byou.cua.planning import PlanningLayer
 from byou.cua.execution import ExecutionLayer

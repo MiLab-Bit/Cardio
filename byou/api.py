@@ -21,6 +21,7 @@ from byou.core.orchestrator import Orchestrator
 from byou.agents import create_agent
 from byou.core.learning_loop import LearningLoop
 from byou.cua.planning import PlanningLayer
+from byou.tools.crm import CRMService, CRMConfig, CRMProvider
 
 # ── App ──────────────────────────────────────────────────────────────────────────
 
@@ -92,6 +93,22 @@ async def get_orchestrator() -> Orchestrator:
     return _orchestrator
 
 
+# ── CRM Service Singleton ───────────────────────────────────────────────
+
+_crm_service: CRMService | None = None
+_crm_service_lock = asyncio.Lock()
+
+
+async def get_crm_service() -> CRMService:
+    """Thread-safe singleton accessor for CRMService."""
+    global _crm_service
+    if _crm_service is None:
+        async with _crm_service_lock:
+            if _crm_service is None:
+                _crm_service = CRMService()
+    return _crm_service
+
+
 # ── Request Models ────────────────────────────────────────────────────────────────
 
 class PipelineRequest(BaseModel):
@@ -113,6 +130,32 @@ class ToolInvokeRequest(BaseModel):
     stream: bool = False
     async_run: bool = False
     session_id: str | None = None
+
+
+# ── CRM Request Models ──────────────────────────────────────────────────
+
+class CRMConfigRequest(BaseModel):
+    provider: str = "generic"       # generic | salesforce | hubspot
+    api_url: str = ""
+    api_key: str = ""
+    auto_push: bool = True
+    auto_pull: bool = False
+    conflict_strategy: str = "newest_wins"
+
+
+class CRMSyncPushRequest(BaseModel):
+    pipeline_result: dict[str, Any] | None = None
+    byou_id: str | None = None
+
+
+class CRMContactRequest(BaseModel):
+    name: str = ""
+    email: str = ""
+    phone: str = ""
+    company: str = ""
+    title: str = ""
+    # Allow extra fields
+    model_config = {"extra": "allow"}
 
 
 class ToolInfoResponse(BaseModel):
@@ -210,6 +253,27 @@ async def tool_info():
                     "required": ["url", "form_data"],
                 },
             },
+            {
+                "name": "crm_push",
+                "description": "将分析结果推送到 CRM 系统（自动在 pipeline 完成后触发，也可手动调用）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pipeline_result": {"type": "object", "description": "PipelineContext 结果"},
+                    },
+                },
+            },
+            {
+                "name": "crm_pull",
+                "description": "从 CRM 系统拉取联系人信息。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "crm_id": {"type": "string", "description": "CRM 联系人 ID"},
+                        "email": {"type": "string", "description": "按邮箱查询"},
+                    },
+                },
+            },
         ],
     }
 
@@ -290,6 +354,8 @@ async def _invoke_analyze_customer(
         audio_file_path=audio_path,
         context=params,
     )
+    # Auto-push to CRM (best-effort, non-blocking)
+    asyncio.create_task(_try_crm_push(result))
     return result.model_dump()
 
 
@@ -345,6 +411,10 @@ async def _pipeline_sse_stream(
                 on_progress=on_progress,
             )
             await progress_queue.put({"stage": "complete", "result": result.model_dump()})
+
+            # ── Auto-push to CRM after pipeline completes ────────
+            await _try_crm_push(result)
+
         except Exception as exc:
             await progress_queue.put({"stage": "error", "error": str(exc)})
         finally:
@@ -360,6 +430,20 @@ async def _pipeline_sse_stream(
             yield f"data: {json_mod.dumps(msg, ensure_ascii=False)}\n\n"
     finally:
         await task
+
+
+async def _try_crm_push(result: Any) -> None:
+    """Best-effort CRM push after pipeline completion."""
+    try:
+        svc = await get_crm_service()
+        if not svc.config.api_url or not svc.config.auto_push:
+            return
+        push_result = await svc.push_pipeline(result)
+        logger = __import__("logging").getLogger(__name__)
+        logger.info("CRM auto-push: %s", push_result.get("status", "unknown"))
+    except Exception as e:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("CRM auto-push failed (non-blocking): %s", e)
 
 
 async def _run_pipeline_task(
@@ -379,6 +463,10 @@ async def _run_pipeline_task(
         async with _task_lock:
             _async_tasks[task_id]["status"] = "completed"
             _async_tasks[task_id]["result"] = result.model_dump()
+
+        # Auto-push to CRM
+        await _try_crm_push(result)
+
     except Exception as exc:
         async with _task_lock:
             _async_tasks[task_id]["status"] = "failed"
@@ -592,6 +680,233 @@ async def cua_plan(request: dict):
     task = FakeTask(target_url=url)
     result = await planner.process(perception, task, context=None)
     return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════════
+#  CRM SYNC ENDPOINTS
+# ═════════════════════════════════════════════════════════════════════════════════
+
+@app.post("/crm/config", dependencies=[Depends(verify_api_key)])
+async def configure_crm(req: CRMConfigRequest):
+    """Configure CRM provider at runtime."""
+    svc = await get_crm_service()
+    try:
+        provider = CRMProvider(req.provider)
+    except ValueError:
+        raise HTTPException(400, f"Invalid provider: {req.provider}. Use: generic, salesforce, hubspot")
+    svc.update_config(
+        provider=provider,
+        api_url=req.api_url,
+        api_key=req.api_key,
+        auto_push=req.auto_push,
+        auto_pull=req.auto_pull,
+    )
+    return {"status": "ok", "config": svc.config.model_dump(exclude={"api_key", "oauth_token"})}
+
+
+@app.get("/crm/config", dependencies=[Depends(verify_api_key)])
+async def get_crm_config():
+    """Get current CRM configuration (without secrets)."""
+    svc = await get_crm_service()
+    return {"status": "ok", "config": svc.config.model_dump(exclude={"api_key", "oauth_token"})}
+
+
+@app.post("/crm/sync/push", dependencies=[Depends(verify_api_key)])
+async def crm_push(request: CRMSyncPushRequest):
+    """Push a pipeline result or contact to CRM."""
+    svc = await get_crm_service()
+
+    if request.pipeline_result:
+        # Push pipeline result
+        from byou.models.customer import PipelineContext
+        ctx = PipelineContext(**request.pipeline_result)
+        result = await svc.push_pipeline(ctx)
+        return {"status": "ok", "sync": result}
+
+    return {"status": "error", "message": "pipeline_result required"}
+
+
+@app.post("/crm/sync/pull", dependencies=[Depends(verify_api_key)])
+async def crm_pull(request: dict):
+    """Pull contact from CRM by crm_id or email."""
+    svc = await get_crm_service()
+    crm_id = request.get("crm_id", "")
+    email = request.get("email", "")
+
+    if crm_id:
+        return await svc.pull_contact(crm_id)
+    elif email:
+        return await svc.pull_by_email(email)
+    else:
+        raise HTTPException(400, "crm_id or email required")
+
+
+@app.get("/crm/sync/status", dependencies=[Depends(verify_api_key)])
+async def crm_sync_status(limit: int = 50):
+    """Get CRM sync history."""
+    svc = await get_crm_service()
+    history = svc.get_sync_history(limit)
+    return {"status": "ok", "total": len(history), "records": history}
+
+
+@app.post("/crm/contact", dependencies=[Depends(verify_api_key)])
+async def crm_create_or_update_contact(request: CRMContactRequest):
+    """Create or update a contact in CRM."""
+    svc = await get_crm_service()
+    from byou.tools.crm.models import CRMContact
+    contact = CRMContact(**request.model_dump())
+    record = await svc.engine.push_contact(contact)
+    if svc.sqlite_store:
+        svc._persist_sync_record(record)
+    return {
+        "status": record.status.value,
+        "crm_id": record.crm_id,
+        "error": record.error_message,
+    }
+
+
+@app.get("/crm/contact", dependencies=[Depends(verify_api_key)])
+async def crm_query_contacts(email: str = "", phone: str = "", name: str = ""):
+    """Query CRM for contacts."""
+    svc = await get_crm_service()
+    contacts = await svc.engine.provider.query_contacts(email=email, phone=phone, name=name)
+    return {"status": "ok", "total": len(contacts), "contacts": [c.model_dump() for c in contacts]}
+
+
+# ═════════════════════════════════════════════════════════════════════════════════
+#  CRM OAuth ENDPOINTS (Salesforce/HubSpot)
+# ═════════════════════════════════════════════════════════════════════════════════
+
+@app.post("/crm/oauth/auth-url", dependencies=[Depends(verify_api_key)])
+async def crm_oauth_auth_url(request: dict):
+    """Generate OAuth authorization URL for the configured CRM provider."""
+    svc = await get_crm_service()
+    redirect_uri = request.get("redirect_uri", "")
+    if not redirect_uri:
+        raise HTTPException(400, "redirect_uri required")
+    result = await svc.oauth_get_auth_url(redirect_uri)
+    if result["status"] == "error":
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.post("/crm/oauth/exchange", dependencies=[Depends(verify_api_key)])
+async def crm_oauth_exchange(request: dict):
+    """Exchange OAuth authorization code for access + refresh tokens."""
+    svc = await get_crm_service()
+    code = request.get("code", "")
+    redirect_uri = request.get("redirect_uri", "")
+    if not code or not redirect_uri:
+        raise HTTPException(400, "code and redirect_uri required")
+    result = await svc.oauth_exchange_code(code, redirect_uri)
+    if result["status"] == "error":
+        raise HTTPException(400, result.get("error", "exchange failed"))
+    return result
+
+
+@app.post("/crm/oauth/refresh", dependencies=[Depends(verify_api_key)])
+async def crm_oauth_refresh():
+    """Manually refresh OAuth token."""
+    svc = await get_crm_service()
+    result = await svc.oauth_refresh()
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════════
+#  CRM WEBHOOK ENDPOINTS (real-time pull)
+# ═════════════════════════════════════════════════════════════════════════════════
+
+@app.post("/crm/webhook/{provider}", dependencies=[Depends(verify_api_key)])
+async def crm_webhook(provider: str, request: dict):
+    """Receive CRM webhook events and trigger real-time pull.
+
+    Supported providers: salesforce, hubspot
+
+    Salesforce: expects platform event / Change Data Capture notification
+    HubSpot: expects CRM card webhook or timeline event
+    """
+    svc = await get_crm_service()
+    config = svc.config
+
+    if provider != config.provider.value:
+        raise HTTPException(400, f"Webhook provider {provider} does not match configured provider {config.provider.value}")
+
+    try:
+        if provider == "salesforce":
+            return await _handle_salesforce_webhook(request, svc)
+        elif provider == "hubspot":
+            return await _handle_hubspot_webhook(request, svc)
+        else:
+            raise HTTPException(400, f"Webhook not implemented for provider: {provider}")
+    except Exception as e:
+        logger.error("CRM webhook error (%s): %s", provider, e)
+        raise HTTPException(500, f"Webhook processing error: {e}")
+
+
+async def _handle_salesforce_webhook(payload: dict, svc: CRMService) -> dict:
+    """Handle Salesforce Change Data Capture / Platform Event webhook.
+
+    Salesforce CDC payload structure:
+    {
+        "event": { "type": "updated", "createdDate": "..." },
+        "sobject": { "Id": "...", "Name": "...", ... }
+    }
+    """
+    results = []
+    records = payload if isinstance(payload, list) else [payload]
+
+    for record in records:
+        event_type = record.get("event", {}).get("type", "updated")
+        sobject = record.get("sobject", {})
+        crm_id = sobject.get("Id", "")
+
+        if not crm_id:
+            continue
+
+        # Pull updated contact from CRM
+        if event_type in ("created", "updated"):
+            pull_result = await svc.pull_contact(crm_id)
+            results.append({
+                "crm_id": crm_id,
+                "event": event_type,
+                "pull_result": pull_result,
+            })
+
+    return {"status": "ok", "processed": len(results), "results": results}
+
+
+async def _handle_hubspot_webhook(payload: dict, svc: CRMService) -> dict:
+    """Handle HubSpot CRM webhook.
+
+    HubSpot webhook payload structure:
+    {
+        "eventId": "...",
+        "subscriptionType": "contact.creation",
+        "objectId": 12345,
+        "propertyName": "...",
+        ...
+    }
+    """
+    results = []
+    events = payload if isinstance(payload, list) else [payload]
+
+    for event in events:
+        subscription_type = event.get("subscriptionType", "")
+        object_id = str(event.get("objectId", ""))
+
+        if not object_id:
+            continue
+
+        # Only handle contact events
+        if "contact" in subscription_type:
+            pull_result = await svc.pull_contact(object_id)
+            results.append({
+                "crm_id": object_id,
+                "event": subscription_type,
+                "pull_result": pull_result,
+            })
+
+    return {"status": "ok", "processed": len(results), "results": results}
 
 
 # ═════════════════════════════════════════════════════════════════════════════════

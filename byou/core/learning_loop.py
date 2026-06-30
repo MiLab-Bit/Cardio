@@ -1,7 +1,7 @@
 """Learning Loop — continuous learning and strategy optimisation.
 
 Collects feedback from each pipeline execution, adjusts agent weights and
-persists learning state.
+persists learning state to SQLite (with JSON migration support).
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from typing import Any
 from byou.core.message_bus import MessageBus
 from byou.config import get_settings
 from byou.models.customer import PipelineContext
+from byou.core.sqlite_store import SQLiteStore
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class LearningLoop:
 
     Records execution traces, computes performance metrics and adjusts agent
     weights to improve future pipeline runs.
+    Persistence backed by SQLite (see `sqlite_store.py`).
     """
 
     def __init__(
@@ -63,11 +65,25 @@ class LearningLoop:
         self.data_dir = Path(data_dir or self._settings.data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
+        # SQLite store
+        db_path = self.data_dir / "learning.db"
+        self._store = SQLiteStore(db_path)
+
+        # In-memory caches (synced from DB on load)
         self.strategy_weights: dict[str, float] = dict(DEFAULT_WEIGHTS)
         self.performance_history: list[dict] = []
 
-        # Callers are responsible for serialising writes to these fields.
-        # Orchestrator already holds self._learn_lock.
+        # Migrate legacy JSON if present
+        legacy_json = self.data_dir / "learning_state.json"
+        if legacy_json.exists():
+            try:
+                n = self._store.migrate_from_json(legacy_json)
+                logger.info("Migrated %d records from legacy JSON", n)
+                # Rename legacy file to avoid re-migration
+                legacy_json.rename(legacy_json.with_suffix(".json.bak"))
+            except Exception as e:
+                logger.warning("JSON migration failed: %s", e)
+
         self._load_state()
 
     # ── Recording ───────────────────────────────────────────────
@@ -87,11 +103,27 @@ class LearningLoop:
         if ctx.quality_passed is not None:
             trace.metrics["quality_passed"] = 1.0 if ctx.quality_passed else 0.0
 
+        # Record stage data
+        for stage_name in ["extraction", "research", "synthesis", "strategy", "critique"]:
+            result_key = f"{stage_name}_result"
+            if hasattr(ctx, result_key) and getattr(ctx, result_key):
+                trace.add_stage(stage_name, {"result": getattr(ctx, result_key)})
+
         self._update_performance(trace)
-        logger.info("Trace recorded: %s (trust=%.2f intent=%.2f)",
-                     trace.pipeline_id,
-                     trace.metrics.get("trust_score", 0.0),
-                     trace.metrics.get("intent_score", 0.0))
+
+        # Persist to SQLite
+        try:
+            self._store.save_trace(trace)
+            self._store.save_weights(self.strategy_weights)
+        except Exception as e:
+            logger.warning("SQLite persist failed: %s", e)
+
+        logger.info(
+            "Trace recorded: %s (trust=%.2f intent=%.2f)",
+            trace.pipeline_id,
+            trace.metrics.get("trust_score", 0.0),
+            trace.metrics.get("intent_score", 0.0),
+        )
         return trace
 
     # ── Metrics ─────────────────────────────────────────────────
@@ -99,18 +131,30 @@ class LearningLoop:
     def get_insights(self) -> dict:
         """Return learning insights.
 
-        Returns a dict with average metrics over the recent window,
-        strategy weights and a trend label.
+        Queries SQLite for recent performance data.
         """
-        if not self.performance_history:
+        try:
+            recent = self._store.load_recent_traces(limit=20)
+        except Exception:
+            recent = self.performance_history[-20:] if self.performance_history else []
+
+        if not recent:
             return {"status": "no_data", "message": "Not enough execution data yet"}
 
-        recent = self.performance_history[-20:]
         n = len(recent)
+        avg_trust = sum(r.get("metrics", {}).get("trust_score", 0) for r in recent) / n
+        avg_intent = sum(r.get("metrics", {}).get("intent_score", 0) for r in recent) / n
+        pass_rate = sum(r.get("metrics", {}).get("quality_passed", 0) for r in recent) / n
 
-        avg_trust = sum(m.get("metrics", {}).get("trust_score", 0) for m in recent) / n
-        avg_intent = sum(m.get("metrics", {}).get("intent_score", 0) for m in recent) / n
-        pass_rate = sum(m.get("metrics", {}).get("quality_passed", 0) for m in recent) / n
+        # Save snapshot to SQLite
+        try:
+            self._store.save_snapshot(avg_trust, avg_intent, pass_rate, n, {
+                "avg_trust": avg_trust,
+                "avg_intent": avg_intent,
+                "pass_rate": pass_rate,
+            })
+        except Exception:
+            pass
 
         return {
             "status": "ok",
@@ -122,19 +166,15 @@ class LearningLoop:
             "trend": "improving" if pass_rate > 0.7 else "needs_attention",
         }
 
-    # ── Persistence ─────────────────────────────────────────────
+    # ── Persistence (legacy compatibility) ──────────────────────
 
     def persist(self) -> None:
-        """Persist learning state to disk."""
-        state = {
-            "updated_at": datetime.now().isoformat(),
-            "strategy_weights": dict(self.strategy_weights),
-            "execution_count": len(self.performance_history),
-            "recent_performance": self.performance_history[-50:],
-        }
-        state_file = self.data_dir / "learning_state.json"
-        state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-        logger.info("Learning state persisted: %s", state_file)
+        """Persist learning state (SQLite-backed; this method kept for compatibility)."""
+        try:
+            self._store.save_weights(self.strategy_weights)
+            logger.info("Learning state persisted to SQLite")
+        except Exception as e:
+            logger.warning("Persist failed: %s", e)
 
     # ── Internal ────────────────────────────────────────────────
 
@@ -165,13 +205,11 @@ class LearningLoop:
             logger.debug("Researcher weight → %.2f", self.strategy_weights["researcher"])
 
     def _load_state(self) -> None:
-        state_file = self.data_dir / "learning_state.json"
-        if not state_file.exists():
-            return
         try:
-            data = json.loads(state_file.read_text(encoding="utf-8"))
-            self.strategy_weights = data.get("strategy_weights", DEFAULT_WEIGHTS)
-            self.performance_history = data.get("recent_performance", [])
-            logger.info("Loaded learning state: %d records", len(self.performance_history))
-        except (json.JSONDecodeError, KeyError) as exc:
-            logger.warning("Failed to load learning state: %s", exc)
+            self.strategy_weights = self._store.load_weights()
+            self.performance_history = self._store.load_recent_traces(limit=100)
+            logger.info("Loaded learning state from SQLite: %d trace records", len(self.performance_history))
+        except Exception as e:
+            logger.warning("Failed to load from SQLite: %s — using defaults", e)
+            self.strategy_weights = dict(DEFAULT_WEIGHTS)
+            self.performance_history = []

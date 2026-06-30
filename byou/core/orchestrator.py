@@ -41,6 +41,13 @@ def _build_extraction(ctx: C, card: str | None, audio: str | None) -> dict[str, 
 
 def _handle_extraction(ctx: C, result: dict[str, Any]) -> None:
     ctx.raw_extraction = result
+    ctx.agent_reports["extraction"] = {
+        "agent_name": "extractor",
+        "summary": result.get("summary", "客户信息提取完成"),
+        "details": result,
+        "confidence": result.get("confidence", 0.0),
+        "generated_at": datetime.now().isoformat(),
+    }
     profile_data = result.get("profile", {})
     if profile_data:
         try:
@@ -63,6 +70,13 @@ def _build_research(ctx: C, card: str | None, audio: str | None) -> dict[str, An
 
 def _handle_research(ctx: C, result: dict[str, Any]) -> None:
     ctx.research_result = result
+    ctx.agent_reports["research"] = {
+        "agent_name": "researcher",
+        "summary": result.get("summary", "客户背景调研完成"),
+        "details": result,
+        "confidence": result.get("confidence", 0.0),
+        "generated_at": datetime.now().isoformat(),
+    }
 
 
 def _build_synthesis(ctx: C, card: str | None, audio: str | None) -> dict[str, Any]:
@@ -75,6 +89,13 @@ def _build_synthesis(ctx: C, card: str | None, audio: str | None) -> dict[str, A
 
 def _handle_synthesis(ctx: C, result: dict[str, Any]) -> None:
     ctx.synthesis_result = result
+    ctx.agent_reports["synthesis"] = {
+        "agent_name": "synthesizer",
+        "summary": result.get("summary", "客户画像建模完成"),
+        "details": result,
+        "confidence": result.get("confidence", 0.0),
+        "generated_at": datetime.now().isoformat(),
+    }
     if "enriched_profile" in result:
         try:
             ctx.profile = CustomerProfile(**result["enriched_profile"])
@@ -95,6 +116,13 @@ def _build_strategy(ctx: C, card: str | None, audio: str | None) -> dict[str, An
 
 def _handle_strategy(ctx: C, result: dict[str, Any]) -> None:
     ctx.strategy_result = result
+    ctx.agent_reports["strategy"] = {
+        "agent_name": "strategist",
+        "summary": result.get("summary", "BD策略生成完成"),
+        "details": result,
+        "confidence": result.get("confidence", 0.0),
+        "generated_at": datetime.now().isoformat(),
+    }
     strategy_data = result.get("strategy", {})
     if strategy_data:
         try:
@@ -105,7 +133,11 @@ def _handle_strategy(ctx: C, result: dict[str, Any]) -> None:
 
 
 def _build_critique(ctx: C, card: str | None, audio: str | None) -> dict[str, Any]:
-    strategy_feed = ctx.bd_strategy.model_dump() if ctx.bd_strategy else ctx.strategy_result
+    strategy_feed = getattr(ctx, 'bd_strategy', None)
+    if strategy_feed is not None:
+        strategy_feed = strategy_feed.model_dump()
+    else:
+        strategy_feed = getattr(ctx, 'strategy_result', {})
     return {
         "profile": ctx.profile.model_dump() if ctx.profile else {},
         "research": ctx.research_result,
@@ -116,6 +148,13 @@ def _build_critique(ctx: C, card: str | None, audio: str | None) -> dict[str, An
 
 def _handle_critique(ctx: C, result: dict[str, Any]) -> None:
     ctx.critique_result = result
+    ctx.agent_reports["critique"] = {
+        "agent_name": "critic",
+        "summary": result.get("summary", "风险审核完成"),
+        "details": result,
+        "confidence": result.get("confidence", 0.0),
+        "generated_at": datetime.now().isoformat(),
+    }
     ctx.trust_score = result.get("trust_score")
     ctx.risk_alerts = result.get("risk_alerts", [])
     ctx.quality_passed = result.get("passed")

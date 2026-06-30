@@ -1,0 +1,143 @@
+.workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* 顶部工具栏 */
+.workspace-header {
+  display: flex;
+  align-items: center;
+  padding:12px 20px;
+  background: var(--bg-secondary);
+  border-bottom:1px solid var(--border);
+  gap:12px;
+  flex-shrink:0;
+}
+
+.workspace-title {
+  font-size:16px;
+  font-weight:700;
+  color: var(--accent);
+  margin-right: auto;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap:10px;
+}
+
+.file-name {
+  font-size:13px;
+  color: var(--text-secondary);
+  max-width:200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-icon {
+  background: none;
+  color: var(--text-secondary);
+  font-size:18px;
+  padding:6px 10px;
+  border-radius: var(--radius);
+}
+.btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.btn-primary {
+  background: var(--accent);
+  color: white;
+  padding:8px 18px;
+  border-radius: var(--radius);
+  font-size:14px;
+  font-weight:500;
+  transition: opacity 0.2s;
+}
+.btn-primary:hover { opacity:0.85; }
+.btn-primary:disabled { opacity:0.5; cursor:not-allowed; }
+
+.btn-secondary {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  padding:8px 18px;
+  border:1px solid var(--border);
+  border-radius: var(--radius);
+  font-size:14px;
+}
+.btn-secondary:hover { background: var(--bg-hover); }
+
+/* 进度条轨道 */
+.progress-track {
+  display: flex;
+  align-items: center;
+  padding:16px 24px;
+  gap:0;
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+  overflow-x: auto;
+}
+
+.progress-step {
+  display: flex;
+  align-items: center;
+  gap:8px;
+  padding:6px 14px;
+  border-radius:20px;
+  font-size:13px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.progress-step.active {
+  color: var(--accent);
+  background: rgba(59,130,246,0.1);
+}
+
+.progress-step.done {
+  color: var(--success);
+}
+
+.step-dot {
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  flex-shrink:0;
+}
+
+.step-label {
+  font-weight:500;
+}
+
+.step-pct {
+  font-size:11px;
+  opacity:0.7;
+}
+
+/* 报告网格 */
+.reports-grid {
+  flex:1;
+  overflow-y: auto;
+  padding:20px 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 错误/完成横幅 */
+.error-banner {
+  padding:10px 24px;
+  background: rgba(239,68,68,0.15);
+  color: var(--danger);
+  font-size:14px;
+  flex-shrink:0;
+}
+
+.done-banner {
+  padding:10px 24px;
+  background: rgba(16,185,129,0.15);
+  color: var(--success);
+  font-size:14px;
+  flex-shrink:0;
+}

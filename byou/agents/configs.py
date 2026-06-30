@@ -83,6 +83,15 @@ def _prompt_strategist(input_data: dict) -> str:
     )
 
 
+def _safe_json_dumps(obj):
+    """JSON serialize with datetime support."""
+    def default(o):
+        if hasattr(o, 'isoformat'):
+            return o.isoformat()
+        raise TypeError(f'Object of type {type(o).__name__} is not JSON serializable')
+    return json.dumps(obj, ensure_ascii=False, indent=2, default=default)
+
+
 def _prompt_critic(input_data: dict) -> str:
     profile = input_data.get("profile", {})
     research = input_data.get("research", {})
@@ -90,13 +99,13 @@ def _prompt_critic(input_data: dict) -> str:
     strategy = input_data.get("strategy", {})
     return (
         "### Extracted Info\n"
-        f"{json.dumps(profile, ensure_ascii=False, indent=2)}\n\n"
+        f"{_safe_json_dumps(profile)}\n\n"
         "### Research\n"
-        f"{json.dumps(research, ensure_ascii=False, indent=2)}\n\n"
+        f"{_safe_json_dumps(research)}\n\n"
         "### Synthesis\n"
-        f"{json.dumps(synthesis, ensure_ascii=False, indent=2)}\n\n"
+        f"{_safe_json_dumps(synthesis)}\n\n"
         "### Strategy\n"
-        f"{json.dumps(strategy, ensure_ascii=False, indent=2)}\n\n"
+        f"{_safe_json_dumps(strategy)}\n\n"
         "Perform a comprehensive quality audit."
     )
 

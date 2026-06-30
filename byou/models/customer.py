@@ -56,6 +56,8 @@ class PipelineContext(BaseModel):
     quality_passed: Optional[bool] = None
     risk_alerts: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+    agent_reports: dict[str, Any] = Field(default_factory=dict)
+    bd_strategy: Optional["BDStrategy"] = None  # set by _handle_strategy
 
     def get_summary(self) -> dict:
         return {

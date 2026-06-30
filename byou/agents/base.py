@@ -145,7 +145,7 @@ class Agent:
         last_error = None
         for attempt in range(1, self._max_retries + 1):
             # ── Route ────────────────────────────────────────────────
-            decision: RoutingDecision = self._router.route(
+            decision: RoutingDecision = await self._router.route(
                 full_text,
                 tools=[],
                 history_turns=len(messages) - 1,

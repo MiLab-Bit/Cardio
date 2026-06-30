@@ -63,3 +63,23 @@ nul
 # Large model files
 *.gguf
 models/*.gguf
+
+# Database files (SQLite)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+*.db
+*.db-shm
+*.db-wal
+
+# Build artifacts
+electron/dist/
+electron/node_modules/
+frontend/node_modules/
+node_modules/
+build/
+dist/
+
+# OS specific
+.DS_Store
+Thumbs.db

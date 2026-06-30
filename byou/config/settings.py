@@ -175,6 +175,14 @@ class Settings(BaseSettings):
     # ── CRM integration (optional) ─────────────────────────────
     crm_api_url: str = ""
     crm_api_key: str = ""
+    crm_provider: str = Field(default="generic", alias="CRM_PROVIDER")
+    crm_auto_push: bool = Field(default=True, alias="CRM_AUTO_PUSH")
+    crm_auto_pull: bool = Field(default=False, alias="CRM_AUTO_PULL")
+    crm_conflict_strategy: str = Field(default="newest_wins", alias="CRM_CONFLICT_STRATEGY")
+    # Salesforce OAuth
+    crm_oauth_client_id: str = Field(default="", alias="CRM_OAUTH_CLIENT_ID")
+    crm_oauth_client_secret: str = Field(default="", alias="CRM_OAUTH_CLIENT_SECRET")
+    crm_oauth_refresh_token: str = Field(default="", alias="CRM_OAUTH_REFRESH_TOKEN")
 
     # ── Web Search (Tavily) ────────────────────────────────────
     tavily_api_key: str = Field(default="", alias="TAVILY_API_KEY")
