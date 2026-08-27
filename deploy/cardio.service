@@ -1,0 +1,17 @@
+[Unit]
+Description=Cardio Agent API (数字商册后端)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/cardio
+EnvironmentFile=/opt/cardio/.env
+ExecStart=/opt/cardio/.venv/bin/uvicorn cardio.server:app --host 127.0.0.1 --port 8010 --workers 2
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

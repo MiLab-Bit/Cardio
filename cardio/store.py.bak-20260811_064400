@@ -1,0 +1,515 @@
+"""本地 SQLite 存储 — 数字商册（联系人）、历史分析记录、用户账号。
+
+M1 改造要点：
+- 增加 owner 列（= 用户 id）做数据隔离，扫描名片自动落库、分析可关联 contact_id
+- 连接统一用上下文管理器确保关闭；WAL 提升读写并发
+
+本次改造：新增 users 表与账号函数，owner 即注册用户 id（与 BizAtlas 同范式）。
+"""
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+from . import config
+from .auth import verify_password
+
+
+DEFAULT_OWNER = "default"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _connect() -> sqlite3.Connection:
+    os.makedirs(os.path.dirname(config.DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    # 多 worker 并发写：WAL 允许读写并发，busy_timeout 避免 "database is locked"
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            email TEXT UNIQUE,
+            name TEXT,
+            password_hash TEXT NOT NULL,
+            email_verified INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS email_verifications (
+            token_hash TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS api_keys (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            key_hash TEXT NOT NULL,
+            prefix TEXT NOT NULL,
+            scopes TEXT NOT NULL DEFAULT '["*"]',
+            status TEXT NOT NULL DEFAULT 'active',
+            last_used_at TEXT,
+            created_at TEXT,
+            revoked_at TEXT
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS model_providers (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            api_key_enc TEXT NOT NULL,
+            base_url TEXT,
+            model TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT,
+            updated_at TEXT,
+            last_used_at TEXT
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS contacts (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            title TEXT,
+            company TEXT,
+            phone TEXT,
+            email TEXT,
+            tags TEXT,
+            notes TEXT,
+            created_at TEXT,
+            owner TEXT NOT NULL DEFAULT 'default'
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS analyses (
+            id TEXT PRIMARY KEY,
+            input_text TEXT,
+            result_json TEXT,
+            created_at TEXT,
+            owner TEXT NOT NULL DEFAULT 'default',
+            contact_id TEXT
+        )"""
+    )
+    _migrate(conn)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_contacts_owner ON contacts(owner)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_analyses_owner ON analyses(owner)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys(owner_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_model_providers_owner ON model_providers(owner_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_email_verifications_user ON email_verifications(user_id)")
+    conn.commit()
+    return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """对已有库补齐 owner / contact_id 列（新库 CREATE 时不带，运行时补）。"""
+    cols_contacts = {r[1] for r in conn.execute("PRAGMA table_info(contacts)")}
+    if "owner" not in cols_contacts:
+        conn.execute("ALTER TABLE contacts ADD COLUMN owner TEXT NOT NULL DEFAULT 'default'")
+    cols_analyses = {r[1] for r in conn.execute("PRAGMA table_info(analyses)")}
+    if "owner" not in cols_analyses:
+        conn.execute("ALTER TABLE analyses ADD COLUMN owner TEXT NOT NULL DEFAULT 'default'")
+    if "contact_id" not in cols_analyses:
+        conn.execute("ALTER TABLE analyses ADD COLUMN contact_id TEXT")
+    cols_users = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
+    if "name" not in cols_users:
+        conn.execute("ALTER TABLE users ADD COLUMN name TEXT")
+    if "email_verified" not in cols_users:
+        conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
+
+
+# ── 用户账号 ──
+def create_user(email: str, password_hash: str, name: str = "") -> str | None:
+    uid = uuid.uuid4().hex[:12]
+    with _connect() as c:
+        try:
+            c.execute(
+                "INSERT INTO users (id,email,name,password_hash,created_at) VALUES (?,?,?,?,?)",
+                (uid, email.lower().strip(), name, password_hash, _now()),
+            )
+        except sqlite3.IntegrityError:
+            return None  # 邮箱已注册
+    return uid
+
+
+def verify_user(email: str, password: str) -> str | None:
+    with _connect() as c:
+        r = c.execute("SELECT id,password_hash FROM users WHERE email=?", (email.lower().strip(),)).fetchone()
+    if not r:
+        return None
+    if not verify_password(r["password_hash"], password):
+        return None
+    return r["id"]
+
+
+def get_user(uid: str) -> dict[str, Any] | None:
+    with _connect() as c:
+        r = c.execute("SELECT id,email,name,email_verified FROM users WHERE id=?", (uid,)).fetchone()
+    return {"id": r["id"], "email": r["email"], "name": r["name"], "email_verified": bool(r["email_verified"])} if r else None
+
+
+def get_user_by_email(email: str) -> dict[str, Any] | None:
+    with _connect() as c:
+        r = c.execute(
+            "SELECT id,email,name,email_verified,password_hash FROM users WHERE email=?",
+            (email.lower().strip(),),
+        ).fetchone()
+    if not r:
+        return None
+    return {
+        "id": r["id"], "email": r["email"], "name": r["name"],
+        "email_verified": bool(r["email_verified"]), "password_hash": r["password_hash"],
+    }
+
+
+def set_email_verified(uid: str) -> None:
+    with _connect() as c:
+        c.execute("UPDATE users SET email_verified=1 WHERE id=?", (uid,))
+
+
+# ── 邮箱验证 / 密码找回 token ──
+def save_verify_token(token_hash: str, uid: str, purpose: str, expires_at: str) -> None:
+    with _connect() as c:
+        c.execute(
+            "INSERT INTO email_verifications (token_hash,user_id,purpose,expires_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(token_hash) DO UPDATE SET user_id=excluded.user_id, purpose=excluded.purpose, expires_at=excluded.expires_at",
+            (token_hash, uid, purpose, expires_at),
+        )
+
+
+def get_verify_token(token_hash: str) -> dict[str, Any] | None:
+    with _connect() as c:
+        r = c.execute(
+            "SELECT user_id,purpose,expires_at FROM email_verifications WHERE token_hash=?",
+            (token_hash,),
+        ).fetchone()
+    return {"user_id": r["user_id"], "purpose": r["purpose"], "expires_at": r["expires_at"]} if r else None
+
+
+def delete_verify_token(token_hash: str) -> None:
+    with _connect() as c:
+        c.execute("DELETE FROM email_verifications WHERE token_hash=?", (token_hash,))
+
+
+# ── Agent API Key（机器凭证）──
+def create_api_key(owner_id: str, name: str, key_hash: str, prefix: str, scopes: list[str]) -> str:
+    kid = uuid.uuid4().hex[:12]
+    with _connect() as c:
+        c.execute(
+            "INSERT INTO api_keys (id,owner_id,name,key_hash,prefix,scopes,created_at) VALUES (?,?,?,?,?,?,?)",
+            (kid, owner_id, name, key_hash, prefix, json.dumps(scopes, ensure_ascii=False), _now()),
+        )
+    return kid
+
+
+def list_api_keys(owner_id: str) -> list[dict[str, Any]]:
+    with _connect() as c:
+        rows = c.execute(
+            "SELECT id,name,prefix,scopes,status,last_used_at,created_at,revoked_at FROM api_keys WHERE owner_id=?",
+            (owner_id,),
+        ).fetchall()
+    out = []
+    for r in rows:
+        out.append({
+            "id": r["id"], "name": r["name"], "prefix": r["prefix"],
+            "scopes": json.loads(r["scopes"] or "[]"), "status": r["status"],
+            "last_used_at": r["last_used_at"], "created_at": r["created_at"], "revoked_at": r["revoked_at"],
+        })
+    return out
+
+
+def get_api_key_by_hash(key_hash: str) -> dict[str, Any] | None:
+    with _connect() as c:
+        r = c.execute(
+            "SELECT id,owner_id,status,scopes FROM api_keys WHERE key_hash=?", (key_hash,)
+        ).fetchone()
+    if not r:
+        return None
+    return {
+        "id": r["id"], "owner_id": r["owner_id"], "status": r["status"],
+        "scopes": json.loads(r["scopes"] or "[]"),
+    }
+
+
+def rotate_api_key(key_id: str, owner_id: str, key_hash: str, prefix: str) -> bool:
+    with _connect() as c:
+        cur = c.execute(
+            "UPDATE api_keys SET key_hash=?, prefix=?, status='active', revoked_at=NULL "
+            "WHERE id=? AND owner_id=?",
+            (key_hash, prefix, key_id, owner_id),
+        )
+        return cur.rowcount > 0
+
+
+def revoke_api_key(key_id: str, owner_id: str) -> bool:
+    with _connect() as c:
+        cur = c.execute(
+            "UPDATE api_keys SET status='revoked', revoked_at=? WHERE id=? AND owner_id=?",
+            (_now(), key_id, owner_id),
+        )
+        return cur.rowcount > 0
+
+
+def touch_api_key(key_id: str) -> None:
+    with _connect() as c:
+        c.execute("UPDATE api_keys SET last_used_at=? WHERE id=?", (_now(), key_id))
+
+
+# ── 用户自带大模型供应商配置（model_providers）──
+# 与机器凭证 api_keys 解耦：此处存的是用户自己的 LLM 供应商 Key（加密静态存储）。
+# 预设与 RedTrip/BizAtlas 保持一致：驼峰字段 + 列表结构。
+_PROVIDER_PRESETS = [
+    {"provider": "openai", "label": "OpenAI", "baseUrl": "https://api.openai.com/v1", "defaultModel": "gpt-4o-mini"},
+    {"provider": "anthropic", "label": "Anthropic", "baseUrl": "https://api.anthropic.com/v1", "defaultModel": "claude-3-5-sonnet-latest"},
+    {"provider": "deepseek", "label": "DeepSeek", "baseUrl": "https://api.deepseek.com/v1", "defaultModel": "deepseek-chat"},
+    {"provider": "moonshot", "label": "Moonshot 月之暗面", "baseUrl": "https://api.moonshot.cn/v1", "defaultModel": "moonshot-v1-8k"},
+    {"provider": "qwen", "label": "通义千问", "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1", "defaultModel": "qwen-plus"},
+    {"provider": "zhipu", "label": "智谱 GLM", "baseUrl": "https://open.bigmodel.cn/api/paas/v4", "defaultModel": "glm-4-flash"},
+    {"provider": "ollama", "label": "Ollama（本地）", "baseUrl": "http://localhost:11434/v1", "defaultModel": "llama3.1"},
+    {"provider": "custom", "label": "自定义 / 兼容 OpenAI", "baseUrl": "", "defaultModel": ""},
+]
+
+
+def provider_presets() -> list[dict[str, Any]]:
+    return _PROVIDER_PRESETS
+
+
+def preset_for(provider: str) -> dict[str, Any]:
+    """按 provider 名取预设；不存在返回空字典。"""
+    return next((p for p in _PROVIDER_PRESETS if p["provider"] == provider), {})
+
+
+def create_model_provider(
+    owner_id: str, name: str, provider: str, api_key: str, base_url: str | None, model: str | None
+) -> str:
+    """创建一条用户自带大模型供应商配置，api_key 加密存储。返回新记录 id。"""
+    from . import crypto
+
+    pid = uuid.uuid4().hex[:12]
+    enc = crypto.encrypt(api_key)
+    with _connect() as c:
+        c.execute(
+            "INSERT INTO model_providers (id,owner_id,name,provider,api_key_enc,base_url,model,status,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (pid, owner_id, name, provider, enc, base_url, model, "active", _now(), _now()),
+        )
+    return pid
+
+
+def list_model_providers(owner_id: str) -> list[dict[str, Any]]:
+    """列出某用户的供应商配置（key 仅展示后 4 位，不返回明文）。"""
+    with _connect() as c:
+        rows = c.execute(
+            "SELECT id,name,provider,base_url,model,status,created_at,updated_at,last_used_at "
+            "FROM model_providers WHERE owner_id=? ORDER BY created_at DESC",
+            (owner_id,),
+        ).fetchall()
+    out = []
+    for r in rows:
+        masked = ""
+        if r["provider"]:
+            pass  # 不在此处解密
+        out.append({
+            "id": r["id"], "name": r["name"], "provider": r["provider"],
+            "base_url": r["base_url"], "model": r["model"], "status": r["status"],
+            "created_at": r["created_at"], "updated_at": r["updated_at"], "last_used_at": r["last_used_at"],
+        })
+    return out
+
+
+def get_model_provider(id: str, owner_id: str) -> dict[str, Any] | None:
+    """取单条配置（含解密后的明文 key，仅供后端调用大模型使用）。"""
+    from . import crypto
+
+    with _connect() as c:
+        r = c.execute(
+            "SELECT id,owner_id,name,provider,api_key_enc,base_url,model,status FROM model_providers "
+            "WHERE id=? AND owner_id=?",
+            (id, owner_id),
+        ).fetchone()
+    if not r:
+        return None
+    return {
+        "id": r["id"], "owner_id": r["owner_id"], "name": r["name"], "provider": r["provider"],
+        "api_key": crypto.decrypt(r["api_key_enc"]), "base_url": r["base_url"], "model": r["model"],
+        "status": r["status"],
+    }
+
+
+def get_active_model_provider(owner_id: str) -> dict[str, Any] | None:
+    """取该用户最近一条 active 配置（供对话/分析实际调用大模型时使用）。"""
+    with _connect() as c:
+        r = c.execute(
+            "SELECT id FROM model_providers WHERE owner_id=? AND status='active' ORDER BY updated_at DESC LIMIT 1",
+            (owner_id,),
+        ).fetchone()
+    if not r:
+        return None
+    return get_model_provider(r["id"], owner_id)
+
+
+def delete_model_provider(id: str, owner_id: str) -> bool:
+    with _connect() as c:
+        cur = c.execute("DELETE FROM model_providers WHERE id=? AND owner_id=?", (id, owner_id))
+        return cur.rowcount > 0
+
+
+def touch_model_provider(id: str) -> None:
+    with _connect() as c:
+        c.execute("UPDATE model_providers SET last_used_at=? WHERE id=?", (_now(), id))
+
+
+def _normalize_tags(tags: Any) -> list[str]:
+    if isinstance(tags, str):
+        return [t.strip() for t in tags.replace("，", ",").split(",") if t.strip()]
+    if isinstance(tags, list):
+        return [str(t).strip() for t in tags if str(t).strip()]
+    return []
+
+
+def save_contact(owner: str, data: dict[str, Any]) -> dict[str, Any]:
+    cid = data.get("id") or uuid.uuid4().hex[:12]
+    row = (
+        cid,
+        data.get("name", ""),
+        data.get("title", ""),
+        data.get("company", ""),
+        data.get("phone", ""),
+        data.get("email", ""),
+        json.dumps(_normalize_tags(data.get("tags")), ensure_ascii=False),
+        data.get("notes", ""),
+        _now(),
+        owner,
+    )
+    with _connect() as c:
+        c.execute(
+            """INSERT INTO contacts (id,name,title,company,phone,email,tags,notes,created_at,owner)
+               VALUES (?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                 name=excluded.name, title=excluded.title, company=excluded.company,
+                 phone=excluded.phone, email=excluded.email, tags=excluded.tags,
+                 notes=excluded.notes, owner=excluded.owner""",
+            row,
+        )
+    return get_contact(cid)
+
+
+def update_contact(owner: str, cid: str, data: dict[str, Any]) -> dict[str, Any] | None:
+    existing = get_contact(cid)
+    if not existing or existing.get("owner") != owner:
+        return None
+    merged = {**existing, **{k: v for k, v in data.items() if v is not None}}
+    return save_contact(owner, merged)
+
+
+def delete_contact(owner: str, cid: str) -> bool:
+    with _connect() as c:
+        cur = c.execute("DELETE FROM contacts WHERE id=? AND owner=?", (cid, owner))
+        return cur.rowcount > 0
+
+
+def get_contact(cid: str) -> dict[str, Any] | None:
+    with _connect() as c:
+        r = c.execute("SELECT * FROM contacts WHERE id=?", (cid,)).fetchone()
+    return _row_to_contact(r) if r else None
+
+
+def list_contacts(
+    owner: str = DEFAULT_OWNER, limit: int = 100, q: str | None = None
+) -> list[dict[str, Any]]:
+    with _connect() as c:
+        if q:
+            like = f"%{q}%"
+            rows = c.execute(
+                "SELECT * FROM contacts WHERE owner=? AND "
+                "(name LIKE ? OR company LIKE ? OR title LIKE ? OR email LIKE ?) "
+                "ORDER BY created_at DESC LIMIT ?",
+                (owner, like, like, like, like, limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM contacts WHERE owner=? ORDER BY created_at DESC LIMIT ?",
+                (owner, limit),
+            ).fetchall()
+    return [_row_to_contact(r) for r in rows]
+
+
+def _row_to_contact(r: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "title": r["title"],
+        "company": r["company"],
+        "phone": r["phone"],
+        "email": r["email"],
+        "tags": json.loads(r["tags"] or "[]"),
+        "notes": r["notes"],
+        "created_at": r["created_at"],
+        "owner": r["owner"] if "owner" in r else DEFAULT_OWNER,
+    }
+
+
+def save_analysis(
+    owner: str,
+    input_text: str,
+    result: dict[str, Any],
+    contact_id: str | None = None,
+) -> dict[str, Any]:
+    aid = uuid.uuid4().hex[:12]
+    with _connect() as c:
+        c.execute(
+            "INSERT INTO analyses (id,input_text,result_json,created_at,owner,contact_id) "
+            "VALUES (?,?,?,?,?,?)",
+            (aid, input_text, json.dumps(result, ensure_ascii=False), _now(), owner, contact_id),
+        )
+    return {"id": aid, "created_at": _now(), "contact_id": contact_id}
+
+
+def list_analyses(
+    owner: str = DEFAULT_OWNER, limit: int = 50, contact_id: str | None = None
+) -> list[dict[str, Any]]:
+    with _connect() as c:
+        if contact_id:
+            rows = c.execute(
+                "SELECT * FROM analyses WHERE owner=? AND contact_id=? ORDER BY created_at DESC LIMIT ?",
+                (owner, contact_id, limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM analyses WHERE owner=? ORDER BY created_at DESC LIMIT ?",
+                (owner, limit),
+            ).fetchall()
+    out = []
+    for r in rows:
+        out.append({
+            "id": r["id"],
+            "input_text": r["input_text"],
+            "result": json.loads(r["result_json"] or "{}"),
+            "created_at": r["created_at"],
+            "contact_id": r["contact_id"] if "contact_id" in r else None,
+        })
+    return out
+
+
+def check_db() -> bool:
+    """探测数据库是否可用（健康检查时调用）。"""
+    try:
+        with _connect() as c:
+            c.execute("SELECT 1")
+        return True
+    except Exception:
+        return False
