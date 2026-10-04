@@ -1,19 +1,28 @@
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-env/
+# Runtime
+*.pid
+*.log
 *.egg-info/
-.pytest_cache/
-.mypy_cache/
+__pycache__/
+*.pyc
+
+# Venv
+venv/
+.venv/
+
+# Env
 .env
 .env.*
-!.env.example
-data/
-*.sqlite
-*.sqlite3
-backups/
-node_modules/
+
+# Data
+data/*.sqlite
+data/*.db
+*.db-journal
+
+# Build
 dist/
 build/
-.DS_Store
+node_modules/
+
+# Smoke tests (local only)
+smoke_*.py
+start_*.sh
