@@ -62,4 +62,16 @@ python -m cardio.temporal.worker
 
 ---
 
+## 在线部署 / Live Deployment
+
+| 环境 | 地址 |
+|---|---|
+| API 服务 | http://cardio.sy-realm.ltd |
+| 健康检查 | http://cardio.sy-realm.ltd/health |
+
+> FastAPI 后端（五段 BD 分析管线），部署于阿里云 ECS，经 Nginx 反代，DNS 走 Cloudflare（DNS-only 直连）。
+> 编排底座：Temporal（[temporal.sy-realm.ltd](http://temporal.sy-realm.ltd) 可视化 Workflow 执行）。
+
+
+
 © Cardio · MiLab-Bit
