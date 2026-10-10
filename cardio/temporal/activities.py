@@ -26,6 +26,7 @@ async def _llm_call(system: str, user: str, provider: dict | None = None) -> dic
         max_tokens=config.LLM_MAX_TOKENS,
     )
     text = resp.choices[0].message.content or "{}"
+    # 提取 JSON
     text = text.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[-1].rsplit("```", 1)[0]
