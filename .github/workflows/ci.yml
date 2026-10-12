@@ -1,0 +1,40 @@
+name: ci
+
+# 门禁：main 的 push 与所有 PR 都跑同一条命令 —— scripts/preflight.sh。
+# 本地和 CI 共用一个入口，避免「本地过了 CI 没过」。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    name: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 安装 Python 依赖
+        run: |
+          set -e
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: 跑门禁（唯一入口）
+        run: bash scripts/preflight.sh
