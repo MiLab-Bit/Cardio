@@ -26,7 +26,7 @@ class CardioAnalyzeWorkflow:
     @workflow.run
     async def run(self, inp: AnalyzeInput) -> dict[str, Any]:
         self._emit("init", 2.0, "接收客户信息")
-        shared = {"raw_text": inp.raw_text, "provider": inp.provider}
+        shared = {"raw_text": inp.raw_text, "provider": inp.provider, "owner": inp.owner}
 
         # 1) extraction
         self._emit("extraction", 20.0, "信息提取")
