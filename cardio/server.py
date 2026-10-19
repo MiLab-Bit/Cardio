@@ -348,10 +348,17 @@ async def chat(request: Request):
 
     async def event_stream():
         yield "data: " + json.dumps({"type": "start"}, ensure_ascii=False) + "\n\n"
+        llm.set_scope(ident["sub"])
         try:
             gen = await llm.chat(messages, stream=True, provider=provider)
             async for token in gen:
                 yield "data: " + json.dumps({"type": "token", "text": token}, ensure_ascii=False) + "\n\n"
+        except llm.LLMQuotaExceeded:
+            yield "data: " + json.dumps(
+                {"type": "error", "error": "今日 AI 额度已用完（每用户每日 3 次），明日重置；也可在「模型提供方」配置自己的 Key"},
+                ensure_ascii=False,
+            ) + "\n\n"
+            return
         except Exception as exc:  # noqa: BLE001 — 网关不可用等：以 SSE error 事件告知前端，避免裸崩流
             yield "data: " + json.dumps(
                 {"type": "error", "error": f"模型服务暂时不可用：{exc}"}, ensure_ascii=False
@@ -393,6 +400,7 @@ async def analyze(request: Request):
 
         async def run():
             nonlocal contact_id
+            llm.set_scope(owner)
             try:
                 effective_text = text
                 if image:
@@ -418,6 +426,8 @@ async def analyze(request: Request):
                         await queue.put(("vision_error", {"error": str(exc)}))
                 result = await run_pipeline(effective_text, on_progress=on_progress, provider=text_provider)
                 store.save_analysis(owner, effective_text, result, contact_id=contact_id)
+            except llm.LLMQuotaExceeded:
+                await queue.put(("error", {"error": "今日 AI 额度已用完（每用户每日 3 次），明日重置；也可配置自己的模型 Key"}))
             except Exception as exc:  # noqa: BLE001
                 await queue.put(("error", {"error": str(exc)}))
             finally:
@@ -474,8 +484,11 @@ async def card_scan(request: Request):
     image_format = (body.get("image_format") or "jpeg")
     owner = resolve_owner(request)
     mm_provider = store.get_active_provider(owner, "multimodal")
+    llm.set_scope(owner)
     try:
         card = await extract_card(image, image_format, provider=mm_provider)
+    except llm.LLMQuotaExceeded:
+        raise HTTPException(status_code=429, detail={"error": "今日 AI 额度已用完（每用户每日 3 次），明日重置；也可配置自己的模型 Key"})
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail={"error": f"card scan failed: {exc}"})
     contact = store.save_contact(owner, {

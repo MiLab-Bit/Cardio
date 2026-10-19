@@ -52,6 +52,8 @@ CORS_ORIGINS = [o for o in _env(
 # 数据库路径
 DATA_DIR = _env("CARDIO_DATA_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "data"))
 DB_PATH = _env("CARDIO_DB_PATH", os.path.join(DATA_DIR, "cardio.db"))
+# LLM 每日配额计数库（平台网关调用；BYOK 不计）
+QUOTA_DB_PATH = _env("CARDIO_QUOTA_DB", os.path.join(DATA_DIR, "llm_quota.db"))
 
 # 邮箱验证邮件中的回链基址（前端验证页域名）
 EMAIL_BASE_URL = _env("CARDIO_EMAIL_BASE_URL", "https://cardio.sy-realm.ltd")

@@ -10,3 +10,4 @@ class AnalyzeInput:
     raw_text: str = ""
     raw_type: str = "text"  # text | card_image | dialogue
     provider: dict[str, Any] | None = None
+    owner: str = ""  # 配额 scope（用户 id）

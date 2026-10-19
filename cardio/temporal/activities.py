@@ -12,9 +12,10 @@ def _heartbeat(*d: str) -> None:
         pass
 
 
-async def _llm_call(system: str, user: str, provider: dict | None = None) -> dict:
+async def _llm_call(system: str, user: str, provider: dict | None = None, owner: str = "") -> dict:
     """共用 LLM 调用。"""
     from cardio import llm, config
+    llm.set_scope(owner or "anon")
     client = llm.client_for(provider)
     resp = await client.chat.completions.create(
         model=config.LLM_MODEL,
@@ -41,7 +42,7 @@ async def extraction_activity(inp: dict[str, Any]) -> dict[str, Any]:
     """阶段 1: 信息提取。"""
     from cardio.pipeline import SYSTEM_EXTRACTION
     _heartbeat("extraction:start")
-    result = await _llm_call(SYSTEM_EXTRACTION, inp["raw_text"], inp.get("provider"))
+    result = await _llm_call(SYSTEM_EXTRACTION, inp["raw_text"], inp.get("provider"), inp.get("owner", ""))
     _heartbeat("extraction:done")
     return result
 
@@ -52,7 +53,7 @@ async def research_activity(inp: dict[str, Any]) -> dict[str, Any]:
     from cardio.pipeline import SYSTEM_RESEARCH
     _heartbeat("research:start")
     user_msg = json.dumps(inp.get("extraction", {}), ensure_ascii=False)
-    result = await _llm_call(SYSTEM_RESEARCH, user_msg, inp.get("provider"))
+    result = await _llm_call(SYSTEM_RESEARCH, user_msg, inp.get("provider"), inp.get("owner", ""))
     _heartbeat("research:done")
     return result
 
@@ -63,7 +64,7 @@ async def synthesis_activity(inp: dict[str, Any]) -> dict[str, Any]:
     from cardio.pipeline import SYSTEM_SYNTHESIS
     _heartbeat("synthesis:start")
     payload = {"extraction": inp.get("extraction"), "research": inp.get("research")}
-    result = await _llm_call(SYSTEM_SYNTHESIS, json.dumps(payload, ensure_ascii=False), inp.get("provider"))
+    result = await _llm_call(SYSTEM_SYNTHESIS, json.dumps(payload, ensure_ascii=False), inp.get("provider"), inp.get("owner", ""))
     _heartbeat("synthesis:done")
     return result
 
@@ -74,7 +75,7 @@ async def strategy_activity(inp: dict[str, Any]) -> dict[str, Any]:
     from cardio.pipeline import SYSTEM_STRATEGY
     _heartbeat("strategy:start")
     payload = {"profile": inp.get("synthesis"), "extraction": inp.get("extraction")}
-    result = await _llm_call(SYSTEM_STRATEGY, json.dumps(payload, ensure_ascii=False), inp.get("provider"))
+    result = await _llm_call(SYSTEM_STRATEGY, json.dumps(payload, ensure_ascii=False), inp.get("provider"), inp.get("owner", ""))
     _heartbeat("strategy:done")
     return result
 
@@ -90,6 +91,6 @@ async def critique_activity(inp: dict[str, Any]) -> dict[str, Any]:
         "synthesis": inp.get("synthesis"),
         "strategy": inp.get("strategy"),
     }
-    result = await _llm_call(SYSTEM_CRITIQUE, json.dumps(payload, ensure_ascii=False), inp.get("provider"))
+    result = await _llm_call(SYSTEM_CRITIQUE, json.dumps(payload, ensure_ascii=False), inp.get("provider"), inp.get("owner", ""))
     _heartbeat("critique:done")
     return result

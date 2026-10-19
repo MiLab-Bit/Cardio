@@ -7,7 +7,9 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import time
+from contextvars import ContextVar
 from typing import AsyncIterator
 
 from openai import AsyncOpenAI
@@ -15,6 +17,32 @@ from openai import AsyncOpenAI
 from . import config
 
 _client: AsyncOpenAI | None = None
+
+_scope: ContextVar[str] = ContextVar("cardio_llm_scope", default="anon")
+
+
+class LLMQuotaExceeded(Exception):
+    """平台网关每日配额已用完（默认每用户 3 次/日；BYOK 不计）。"""
+
+
+def set_scope(scope: str) -> None:
+    """设置当前请求的配额 scope（用户 id）；请求内所有平台网关调用共用。"""
+    _scope.set(scope or "anon")
+
+
+def _quota_db() -> str:
+    return os.getenv("CARDIO_QUOTA_DB") or config.QUOTA_DB_PATH
+
+
+def _quota_ok() -> bool:
+    shared = os.getenv("OPENCLAW_SHARED_DIR", "/opt/shared")
+    if shared not in sys.path:
+        sys.path.insert(0, shared)
+    try:
+        from llm_quota import allow as _allow
+    except ModuleNotFoundError:  # 开发环境无共享模块时不阻断
+        return True
+    return _allow(_quota_db(), _scope.get())
 
 
 def get_client() -> AsyncOpenAI:
@@ -38,6 +66,9 @@ def client_for(provider: dict | None = None) -> AsyncOpenAI:
             timeout=120.0,
             max_retries=2,
         )
+    # 平台网关：每日配额门（BYOK 不计平台额度）；超限即拒，避免烧 abc-ai.cn token
+    if not _quota_ok():
+        raise LLMQuotaExceeded("daily LLM quota exhausted")
     return get_client()
 
 
@@ -148,17 +179,19 @@ async def chat(
 
     from openai import APIStatusError, RateLimitError
 
-    client = client_for(provider)
     effective_model = model or (provider.get("model") if provider else None) or config.LLM_MODEL
     effective_temp = temperature if temperature is not None else config.LLM_TEMPERATURE
 
-    # 非流式：先查缓存，命中即返回（不触发供应商调用）。
+    # 非流式：先查缓存，命中即返回（不触发供应商调用、不消耗配额）。
     cache_key = None
     if not stream:
         cache_key = _cache_key(provider, effective_model, effective_temp, messages)
         cached = _cache_get(cache_key)
         if cached is not None:
             return cached
+
+    # 缓存未命中 → 走 client_for（内含平台配额门；BYOK 不计量）
+    client = client_for(provider)
 
     last_err: Exception | None = None
     for attempt in range(config.LLM_MAX_RETRIES):
