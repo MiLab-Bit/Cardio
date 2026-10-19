@@ -49,7 +49,9 @@ def send_email(to: str, subject: str, body_text: str | None = None, body_html: s
         print(f"[mail:noop] -> {to} | {subject}\n{(body_text or body_html or '')[:400]}")
         return False
     msg = EmailMessage()
-    msg["From"] = cfg["from"]
+    from_addr = cfg.get("from") or cfg.get("username")
+    from_name = cfg.get("from_name")
+    msg["From"] = f'{from_name} <{from_addr}>' if from_name else from_addr
     msg["To"] = to
     msg["Subject"] = subject
     if body_text:

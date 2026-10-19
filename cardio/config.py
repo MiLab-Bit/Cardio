@@ -54,5 +54,9 @@ DATA_DIR = _env("CARDIO_DATA_DIR", os.path.join(os.path.dirname(os.path.dirname(
 DB_PATH = _env("CARDIO_DB_PATH", os.path.join(DATA_DIR, "cardio.db"))
 
 # 邮箱验证邮件中的回链基址（前端验证页域名）
-EMAIL_BASE_URL = _env("CARDIO_EMAIL_BASE_URL", "https://card-io.pages.dev")
+EMAIL_BASE_URL = _env("CARDIO_EMAIL_BASE_URL", "https://cardio.sy-realm.ltd")
 EMAIL_TOKEN_TTL = int(_env("CARDIO_EMAIL_TOKEN_TTL", "86400"))
+
+# 开发/演示开关：开启后注册即标记邮箱已验证，并直接下发 JWT（跳过邮件验证闭环）。
+# SMTP 未配置期间用它跑通注册→登录全链路；生产建议关闭。
+AUTO_VERIFY_EMAIL = _env("CARDIO_AUTO_VERIFY_EMAIL", "").lower() in ("1", "true", "yes", "on")
