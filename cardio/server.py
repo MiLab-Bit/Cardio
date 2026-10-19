@@ -104,10 +104,10 @@ SHANGSHU_SYSTEM = (
 @app.get("/health")
 async def health():
     return {
-        "status": "ok", "service": "cardio", "version": "0.2.0",
+        "status": "ok", "service": "cardio", "version": "0.3.0",
         "model": config.LLM_MODEL, "vision_model": config.VISION_MODEL,
         "db": "ok" if store.check_db() else "error",
-        "auth": "user",
+        "auth": "user", "auto_verify_email": config.AUTO_VERIFY_EMAIL,
     }
 
 
@@ -141,7 +141,15 @@ async def register(request: Request):
     uid = store.create_user(email, auth_lib.hash_password(password), name)
     if not uid:
         raise HTTPException(status_code=409, detail={"error": "EMAIL_TAKEN", "message": "该邮箱已注册"})
-    # 注册即未验证；发验证邮件（无 SMTP 则仅打印，开发态）
+    # 开发开关：注册即验证并直接登录（SMTP 就绪前跑通全链路）
+    if config.AUTO_VERIFY_EMAIL:
+        store.set_email_verified(uid)
+        u = store.get_user(uid)
+        token = auth_lib.issue_token(u["id"], u["email"], config.JWT_SECRET)
+        return {"status": "registered", "token": token, "auto_verified": True,
+                "user": {"id": u["id"], "email": u["email"], "name": u["name"]},
+                "message": "注册成功，已自动登录（开发模式：邮箱验证已跳过）。"}
+    # 正式流程：注册即未验证；发验证邮件（无 SMTP 则仅打印，开发态）
     tok = auth_lib.make_verify_token()
     exp = str(int(time.time()) + config.EMAIL_TOKEN_TTL)
     store.save_verify_token(auth_lib.hash_token(tok), uid, "verify_email", exp)
@@ -340,9 +348,15 @@ async def chat(request: Request):
 
     async def event_stream():
         yield "data: " + json.dumps({"type": "start"}, ensure_ascii=False) + "\n\n"
-        gen = await llm.chat(messages, stream=True, provider=provider)
-        async for token in gen:
-            yield "data: " + json.dumps({"type": "token", "text": token}, ensure_ascii=False) + "\n\n"
+        try:
+            gen = await llm.chat(messages, stream=True, provider=provider)
+            async for token in gen:
+                yield "data: " + json.dumps({"type": "token", "text": token}, ensure_ascii=False) + "\n\n"
+        except Exception as exc:  # noqa: BLE001 — 网关不可用等：以 SSE error 事件告知前端，避免裸崩流
+            yield "data: " + json.dumps(
+                {"type": "error", "error": f"模型服务暂时不可用：{exc}"}, ensure_ascii=False
+            ) + "\n\n"
+            return
         yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
 
     return StreamingResponse(

@@ -26,3 +26,6 @@ node_modules/
 # Smoke tests (local only)
 smoke_*.py
 start_*.sh
+
+# Backups
+*.bak*
