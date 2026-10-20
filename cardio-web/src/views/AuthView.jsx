@@ -1,7 +1,7 @@
 // 认证页：品牌扉页 + 登录/注册双面板
 import { useState } from 'react'
 import { Compass, Loader2, Mail, Lock, User as UserIcon, ArrowRight, Sparkles } from 'lucide-react'
-import { register, login, resendVerification } from '../api.js'
+import { register, login } from '../api.js'
 
 export default function AuthView({ onAuthed }) {
   const [mode, setMode] = useState('login') // login | register
@@ -11,21 +11,6 @@ export default function AuthView({ onAuthed }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [needVerify, setNeedVerify] = useState(false)
-  const [resending, setResending] = useState(false)
-
-  async function handleResend() {
-    if (!email.trim() || resending) return
-    setResending(true); setError(''); setNotice('')
-    try {
-      await resendVerification(email.trim())
-      setNotice('验证邮件已重新发送，请查收（留意垃圾箱）')
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setResending(false)
-    }
-  }
 
   async function submit(e) {
     e.preventDefault()
@@ -40,7 +25,6 @@ export default function AuthView({ onAuthed }) {
           onAuthed(j.token, j.user) // auto-verify 模式：直接登录
         } else {
           setNotice(j.message || '注册成功，请查收验证邮件后登录。')
-          setNeedVerify(true)
           setMode('login')
         }
       } else {
@@ -48,8 +32,7 @@ export default function AuthView({ onAuthed }) {
         onAuthed(j.token, j.user)
       }
     } catch (err) {
-      if (err.requiresVerification) { setNeedVerify(true); setError('') }
-      else setError(err.message)
+      setError(err.message)
     } finally {
       setBusy(false)
     }
@@ -118,7 +101,7 @@ export default function AuthView({ onAuthed }) {
             {[['login', '登录'], ['register', '注册']].map(([key, label]) => (
               <button
                 key={key}
-                onClick={() => { setMode(key); setError(''); setNotice(''); setNeedVerify(false) }}
+                onClick={() => { setMode(key); setError(''); setNotice('') }}
                 className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all duration-150 ${
                   mode === key ? 'bg-white text-ink shadow-card' : 'text-ink-soft/70 hover:text-ink'
                 }`}
@@ -187,20 +170,6 @@ export default function AuthView({ onAuthed }) {
               </div>
             )}
 
-            {needVerify && (
-              <div className="rounded-xl border border-brass/40 bg-brass/10 px-3.5 py-2.5 text-[13px] text-ink">
-                邮箱尚未验证，验证通过后才能登录。
-                <button
-                  type="button"
-                  onClick={handleResend}
-                  disabled={resending}
-                  className="ml-1 text-brass-deep font-medium hover:underline disabled:opacity-50"
-                >
-                  {resending ? '发送中…' : '重新发送验证邮件'}
-                </button>
-              </div>
-            )}
-
             <button
               type="submit"
               disabled={busy}
@@ -218,7 +187,7 @@ export default function AuthView({ onAuthed }) {
             {mode === 'login' ? '还没有账号？' : '已有账号？'}
             <button
               className="text-brass-deep font-medium hover:underline ml-1"
-              onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); setNotice(''); setNeedVerify(false) }}
+              onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); setNotice('') }}
             >
               {mode === 'login' ? '注册一个' : '去登录'}
             </button>
