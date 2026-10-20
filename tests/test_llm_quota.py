@@ -1,122 +1,120 @@
-"""Cardio LLM 每日配额测试 — 不调 LLM（仅打桩客户端构造）。
+"""Cardio LLM 配额/缓存/BYOK 集成测试 — 不调 LLM（打桩 Gateway 客户端）。
 
-配额门位于 client_for 的平台分支内；测试只替换 get_client/AsyncOpenAI 构造，
-保留 client_for 真实逻辑（含配额门、BYOK 跳过）。缓存 DB 每测试隔离到 tmp_path，
-避免跨测试缓存串扰。
+cardio.llm 现已委托 openclaw_core.gateway.Gateway；本测试只替换 Gateway 的
+客户端构造与配额/缓存存储，验证 cardio.llm 这一层的配额门、BYOK 跳过、
+缓存命中不计量行为（真实网关逻辑在 openclaw_core 黄金测试中覆盖）。
 
-运行（仓库根）：
-    venv/bin/python -m pytest tests/ -q
+运行（仓库根）：venv/bin/python -m pytest tests/ -q
 """
 from __future__ import annotations
 
 import asyncio
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
-sys.path.insert(0, os.getenv("OPENCLAW_SHARED_DIR", "/opt/shared"))
 
-import cardio.config as _cardio_config  # noqa: E402
+import cardio.config as _cfg  # noqa: E402
 from cardio import llm  # noqa: E402
-import llm_quota  # noqa: E402
-
-
-class _Msg:
-    content = "fake-llm-response"
-
-
-class _Choice:
-    message = _Msg()
+from openclaw_core.gateway import _SqliteCache  # noqa: E402
+from openclaw_core.quota import QuotaGate  # noqa: E402
 
 
 class _Resp:
-    choices = [_Choice()]
-
-
-class _FakeClient:
-    """记录 create 调用并返回假响应（chat 与 activities 两条路径都经 client_for）。"""
-
     def __init__(self):
-        self.calls: list = []
-        self.chat = self
-        self.completions = self
+        self.choices = [SimpleNamespace(message=SimpleNamespace(content="fake-llm-response"))]
 
-    async def create(self, **kwargs):
-        self.calls.append(kwargs)
+
+class _Completions:
+    def __init__(self, client):
+        self.client = client
+
+    async def create(self, **kw):
+        self.client.calls.append(kw)
         return _Resp()
 
 
-@pytest.fixture()
-def fake_client(monkeypatch):
-    """只打桩客户端构造；client_for 的真实逻辑（含配额门）照常执行。"""
-    client = _FakeClient()
-    monkeypatch.setattr(llm, "get_client", lambda: client)
-    monkeypatch.setattr(llm, "AsyncOpenAI", lambda **kwargs: client)
-    return client
+class _Chat:
+    def __init__(self, client):
+        self.completions = _Completions(client)
+
+
+class _FakeClient:
+    def __init__(self):
+        self.calls: list = []
+        self.chat = _Chat(self)
 
 
 @pytest.fixture()
-def quota_db(monkeypatch, tmp_path):
-    """配额库 + 缓存库双隔离到 tmp_path，避免跨测试串扰。"""
-    db = str(tmp_path / "llm_quota.db")
-    monkeypatch.setenv("CARDIO_QUOTA_DB", db)
-    monkeypatch.setattr(_cardio_config, "DB_PATH", str(tmp_path / "cardio.db"))
-    return db
+def env(monkeypatch, tmp_path):
+    """隔离配额/缓存库，并打桩 Gateway 客户端为可记录的假客户端。"""
+    qdb = str(tmp_path / "q.db")
+    cdb = str(tmp_path / "c.db")
+    gate = QuotaGate(qdb, limit=3)
+    llm._gateway._quota = gate
+    llm._gateway._cache = _SqliteCache(cdb, 86400, 2000)
+    fc = _FakeClient()
+    monkeypatch.setattr(llm._gateway, "_client", lambda b, k: fc)
+    return fc, gate
 
 
-def _exhaust(db: str, scope: str, limit: int = 3) -> None:
-    for _ in range(limit):
-        assert llm_quota.allow(db, scope, limit=limit)
+def _chat(content: str = "hi", **kw):
+    return asyncio.run(llm.chat([{"role": "user", "content": content}], **kw))
 
 
-def _chat(**kwargs):
-    return asyncio.run(llm.chat([{"role": "user", "content": "hi"}], **kwargs))
-
-
-def test_platform_quota_exhausted_raises(fake_client, quota_db):
+def test_platform_quota_exhausted_raises(env):
+    fc, gate = env
     llm.set_scope("u1")
-    _exhaust(quota_db, "u1")
+    for i in range(3):
+        _chat(content=f"m{i}")  # 3 次不同消息，各自计量
     with pytest.raises(llm.LLMQuotaExceeded):
-        _chat()
-    assert fake_client.calls == []
+        _chat(content="exhaust")  # 第 4 次超默认 3 → 配额门拦截
+    assert len(fc.calls) == 3  # 3 次成功调用已发生，第 4 次未触达客户端
 
 
-def test_within_quota_passes(fake_client, quota_db):
+def test_within_quota_passes(env):
+    fc, gate = env
     llm.set_scope("u1")
     assert _chat() == "fake-llm-response"
-    assert len(fake_client.calls) == 1
+    assert len(fc.calls) == 1
 
 
-def test_byok_skips_quota(fake_client, quota_db):
+def test_byok_skips_quota(env):
+    fc, gate = env
     llm.set_scope("u1")
-    _exhaust(quota_db, "u1")
-    out = _chat(provider={"api_key": "user-own-key", "base_url": "https://byok.example/v1", "model": "m"})
+    for i in range(3):
+        _chat(content=f"m{i}")  # 平台 3 次
+    out = _chat(content="byok", provider={"api_key": "user-own-key", "base_url": "https://byok.example/v1", "model": "m"})
     assert out == "fake-llm-response"
-    assert len(fake_client.calls) == 1
+    assert len(fc.calls) == 4  # BYOK 不计配额，第 4 次仍放行
 
 
-def test_scope_isolation(fake_client, quota_db):
+def test_scope_isolation(env):
+    fc, gate = env
     llm.set_scope("u1")
-    _exhaust(quota_db, "u1")
+    for i in range(3):
+        _chat(content=f"u1-{i}")  # u1 耗尽
     llm.set_scope("u2")
-    assert _chat() == "fake-llm-response"
+    assert _chat(content="u2-1") == "fake-llm-response"  # 不同 scope 独立配额
 
 
-def test_cache_hit_does_not_consume_quota(fake_client, quota_db):
+def test_cache_hit_does_not_consume_quota(env):
+    fc, gate = env
     llm.set_scope("u1")
-    _chat()
-    _chat()
-    assert len(fake_client.calls) == 1  # 第二次命中缓存
-    assert llm_quota.used(quota_db, "u1") == 1  # 缓存命中不计量
+    _chat(content="same")  # 缓存未命中 → 计量 + 调用 + 写入缓存
+    _chat(content="same")  # 缓存命中 → 免费返回
+    assert len(fc.calls) == 1
+    assert gate.used("u1") == 1  # 缓存命中不计量
 
 
-def test_quota_env_unlimited(fake_client, quota_db, monkeypatch):
-    monkeypatch.setenv("LLM_QUOTA_LIMIT", "0")
+def test_quota_env_unlimited(env, monkeypatch, tmp_path):
+    fc, gate = env
+    llm._gateway._quota = QuotaGate(str(tmp_path / "unlim.db"), limit=None)
     llm.set_scope("u1")
     for i in range(5):
-        out = asyncio.run(llm.chat([{"role": "user", "content": f"m{i}"}], stream=False))
-        assert out == "fake-llm-response"
-    assert len(fake_client.calls) == 5
+        assert _chat(content=f"m{i}") == "fake-llm-response"
+    assert len(fc.calls) == 5
