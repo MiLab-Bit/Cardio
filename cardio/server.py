@@ -348,7 +348,8 @@ async def chat(request: Request):
 
     async def event_stream():
         yield "data: " + json.dumps({"type": "start"}, ensure_ascii=False) + "\n\n"
-        llm.set_scope(ident["sub"])        try:
+        llm.set_scope(ident["sub"])
+        try:
             gen = await llm.chat(messages, stream=True, provider=provider)
             async for token in gen:
                 yield "data: " + json.dumps({"type": "token", "text": token}, ensure_ascii=False) + "\n\n"
@@ -357,7 +358,8 @@ async def chat(request: Request):
                 {"type": "error", "error": "今日 AI 额度已用完（每用户每日 3 次），明日重置；也可在「模型提供方」配置自己的 Key"},
                 ensure_ascii=False,
             ) + "\n\n"
-            return        except Exception as exc:  # noqa: BLE001 — 网关不可用等：以 SSE error 事件告知前端，避免裸崩流
+            return
+        except Exception as exc:  # noqa: BLE001 — 网关不可用等：以 SSE error 事件告知前端，避免裸崩流
             yield "data: " + json.dumps(
                 {"type": "error", "error": f"模型服务暂时不可用：{exc}"}, ensure_ascii=False
             ) + "\n\n"
