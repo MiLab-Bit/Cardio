@@ -29,3 +29,5 @@ start_*.sh
 
 # Backups
 *.bak*
+data/*.db-wal
+data/*.db-shm
