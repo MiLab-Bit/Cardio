@@ -135,12 +135,7 @@ export async function login(email, password) {
     body: JSON.stringify({ email, password }),
   }, 30000)
   const j = await r.json().catch(() => ({}))
-  if (!r.ok) {
-    const err = new Error(j?.error?.message || j?.detail?.message || '登录失败')
-    err.status = r.status
-    err.requiresVerification = !!(j?.detail?.requires_verification || j?.requires_verification)
-    throw err
-  }
+  if (!r.ok) throw new Error(j?.error?.message || j?.detail?.message || '登录失败')
   return j // { status, token, user }
 }
 
@@ -154,14 +149,6 @@ export async function resendVerification(email) {
   const j = await r.json().catch(() => ({}))
   if (!r.ok) throw new Error(j?.error?.message || '发送失败')
   return j
-}
-
-export async function verifyEmail(token) {
-  const base = getApiBase()
-  const r = await fetchWithTimeout(`${base}/api/auth/verify-email?token=${encodeURIComponent(token)}`, {}, 30000)
-  const j = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(j?.error?.message || j?.detail?.message || '验证失败')
-  return j // { status, token, user }
 }
 
 /* ── 商枢对话（SSE） ── */
