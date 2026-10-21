@@ -1,6 +1,45 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* ═══════════════════════════════════════════════════════════
+   Cardio 设计 Token（Tailwind v4 CSS-first，原 tailwind.config.js 升格）
+   羊皮纸金墨体系：parchment 纸底 / ink 墨字 / brass 金 / jade 玉 / cinnabar 朱
+   ═══════════════════════════════════════════════════════════ */
+@theme {
+  --color-parchment: #f4ecd8;
+  --color-parchment-deep: #e8dcc0;
+  --color-ink: #2b2118;
+  --color-ink-soft: #5a4a38;
+  --color-brass: #b08d57;
+  --color-brass-deep: #8a6d3f;
+  --color-jade: #3f7d6e;
+  --color-cinnabar: #b5462f;
+
+  --font-serif: "Noto Serif SC", Georgia, serif;
+  --font-sans: "Noto Sans SC", system-ui, sans-serif;
+
+  --shadow-card: 0 8px 30px rgba(43, 33, 24, 0.10);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes viewIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.995); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.95); opacity: 0.7; }
+  70% { transform: scale(1.25); opacity: 0; }
+  100% { transform: scale(1.25); opacity: 0; }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
 
 :root {
   color-scheme: light;
@@ -14,16 +53,12 @@ body,
 }
 
 body {
-  font-family: 'Noto Sans SC', system-ui, sans-serif;
+  font-family: var(--font-sans);
   background:
     radial-gradient(1200px 600px at 80% -10%, rgba(176, 141, 87, 0.18), transparent 60%),
     radial-gradient(900px 500px at -10% 110%, rgba(63, 125, 110, 0.12), transparent 55%),
     #f4ecd8;
   color: #2b2118;
-}
-
-.serif {
-  font-family: 'Noto Serif SC', Georgia, serif;
 }
 
 /* 羊皮纸纹理叠层 */
@@ -46,30 +81,14 @@ body {
   background: transparent;
 }
 
-/* ── 动画 ── */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
+/* ── 动画工具类 ── */
+.animate-fade-in { animation: fadeIn 0.25s ease-out both; }
+.animate-view-in { animation: viewIn 0.3s ease-out both; }
 
-@keyframes viewIn {
-  from { opacity: 0; transform: translateY(8px) scale(0.995); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-@keyframes pulse-ring {
-  0% { transform: scale(0.95); opacity: 0.7; }
-  70% { transform: scale(1.25); opacity: 0; }
-  100% { transform: scale(1.25); opacity: 0; }
-}
 .pulse-ring {
   animation: pulse-ring 1.6s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
 }
 
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
 .cursor-blink::after {
   content: '▍';
   margin-left: 1px;
