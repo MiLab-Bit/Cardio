@@ -1,18 +1,19 @@
-// 侧边栏：桌面常驻 / 移动端抽屉
+// 侧边栏：桌面常驻 / 移动端抽屉（NavLink：深链接 + 中键新开 + 语义 active）
 import {
   Compass, ScanSearch, Users, History, Settings, Boxes, LogOut, X, ShieldCheck,
 } from 'lucide-react'
+import { NavLink } from 'react-router'
 import { NAV } from '../constants.js'
 
 const ICONS = { Compass, ScanSearch, Users, History, Settings, Boxes }
 
-export default function Sidebar({ view, setView, user, onLogout, mobileOpen, onCloseMobile }) {
+export default function Sidebar({ user, onLogout, mobileOpen, onCloseMobile }) {
   return (
     <>
       {/* 移动端遮罩 */}
       {mobileOpen && (
         <div
-          className="fixed inset-0 bg-ink/40 z-30 md:hidden animate-[fadeIn_.15s_ease]"
+          className="fixed inset-0 bg-ink/40 z-30 md:hidden animate-fade-in"
           onClick={onCloseMobile}
         />
       )}
@@ -37,24 +38,29 @@ export default function Sidebar({ view, setView, user, onLogout, mobileOpen, onC
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
           {NAV.map((n) => {
             const Icon = ICONS[n.icon] || Compass
-            const active = view === n.key
             return (
-              <button
+              <NavLink
                 key={n.key}
-                onClick={() => { setView(n.key); onCloseMobile?.() }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-150
-                  active:scale-[0.98] ${
-                  active
+                to={'/' + n.key}
+                onClick={onCloseMobile}
+                className={({ isActive }) =>
+                  `w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-150
+                   active:scale-[0.98] ${
+                  isActive
                     ? 'bg-brass/20 text-parchment shadow-[inset_2px_0_0_0_#b08d57]'
                     : 'text-parchment/70 hover:bg-white/5 hover:text-parchment'
                 }`}
               >
-                <Icon size={18} className={active ? 'text-brass' : ''} />
-                <div className="min-w-0">
-                  <div className="text-sm font-medium leading-tight">{n.label}</div>
-                  <div className="text-[11px] text-parchment/40 truncate">{n.desc}</div>
-                </div>
-              </button>
+                {({ isActive }) => (
+                  <>
+                    <Icon size={18} className={isActive ? 'text-brass' : ''} />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium leading-tight">{n.label}</div>
+                      <div className="text-[11px] text-parchment/40 truncate">{n.desc}</div>
+                    </div>
+                  </>
+                )}
+              </NavLink>
             )
           })}
         </nav>
