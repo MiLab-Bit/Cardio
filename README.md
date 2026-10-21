@@ -1,77 +1,86 @@
-# Cardio · 心血管相关 Web 服务
+# Cardio · BD/销售五段分析管线 Agent
 
-> BD / 销售五段分析管线 Agent，接入 Temporal 编排。
+> **输入一家目标公司或一个机会，Cardio 用五段管线给出结构化研判——提取、调研、综合、策略、批判性审视，一条链路走完。**
 
-## 简介
+Cardio 是一个面向 BD（商务拓展）/ 销售场景的分析服务：把散落在各处的企业信息，压缩成一份可决策的结构化研判。
 
-Cardio 是一个面向 BD（商务拓展）/ 销售场景的分析服务，通过五段管线对目标企业/机会进行结构化研判：
+**▶ 立即体验：[https://cardio.sy-realm.ltd](https://cardio.sy-realm.ltd)**
+
+---
+
+## 它解决什么问题
+
+BD 跟进的每一步都卡在同样三件事上：**资料散**（财报、新闻、招聘、官网各在一处）、**研判慢**（读完全部材料半天过去）、**结论软**（"感觉靠谱"支撑不了上会）。
+
+Cardio 把这三步变成一条五段管线：
 
 ```
 extraction → research → synthesis → strategy → critique
- 提取关键信息   深度调研    综合研判     策略建议    批判性审视
+  提取关键信息   深度调研    综合研判     策略建议    批判性审视
 ```
 
-## Temporal 编排接入（2026-10）
+- **提取**：从目标企业资料中抽取关键信息，形成结构化事实底稿
+- **调研**：围绕底稿做深度调研，补充交叉信息
+- **综合**：把事实与调研结果综合成一份研判
+- **策略**：给出可执行的跟进策略建议
+- **批判**：对前面所有结论做一次批判性审视——**专门挑自己毛病的那一段**
 
-五段分析管线已接入 **Temporal Server v1.27**，实现工作流持久化、自动重试和状态查询。
+你拿到的不只是答案，还有答案被审视过的过程。
 
-### 代码结构
+---
 
-```
-cardio/temporal/
-├── __init__.py
-├── common.py        # AnalyzeInput dataclass
-├── activities.py    # 5 个 async Activity（共用 _llm_call）
-├── worker.py        # Worker 启动器
-└── workflows/
-    └── analyze.py   # CardioAnalyzeWorkflow（五段顺序编排）
-```
+## 使用方式
 
-### 设计要点
+1. 打开 **[cardio.sy-realm.ltd](https://cardio.sy-realm.ltd)**，注册并登录（邮箱验证闭环）
+2. 在模型提供方设置中填入你自己的 API Key（**BYOK**——模型成本自控，平台不代垫）
+3. 新建一次分析：输入目标企业或机会描述，提交五段管线
+4. 每段耗时分钟级，任务持久化执行——中途离开、刷新页面，回来结果还在
+5. 在历史记录中回看每一次分析的完整五段输出
 
-- **async Activity**：五段 Activity 都是 `async def`（内部是异步 LLM HTTP 调用），不需要 ThreadPoolExecutor
-- **共用 LLM 调用**：所有 Activity 共享 `_llm_call(message, system)` 辅助函数，统一超时和重试策略
+> 免费额度：每用户每日 3 次分析；额度用尽时自动使用本地兜底模式，不中断使用。
 
-### 配置
+### 本地开发（可选）
 
 ```bash
-TEMPORAL_ADDRESS=127.0.0.1:7233
-TEMPORAL_NAMESPACE=cardio
-TEMPORAL_TASK_QUEUE=cardio-task-queue
-```
-
-### 运行
-
-```bash
-python -m cardio.temporal.worker
-```
-
-## 快速开始
-
-```bash
-# 安装依赖
+# 后端（FastAPI + Temporal worker）
 python -m venv venv && source venv/bin/activate
 pip install -e .
+cp .env.example .env   # 编辑 .env 填入 LLM API key
 
-# 配置环境变量
-cp .env.example .env  # 编辑 .env 填入 LLM API key
-
-# 启动 Worker
-python -m cardio.temporal.worker
+# 前端（cardio-web/，React + Vite）
+cd cardio-web && pnpm install && pnpm dev
 ```
 
 ---
 
-## 在线部署 / Live Deployment
+## 品牌与产品能力
 
-| 环境 | 地址 |
+| 能力 | 说明 |
 |---|---|
-| API 服务 | http://cardio.sy-realm.ltd |
-| 健康检查 | http://cardio.sy-realm.ltd/health |
+| **五段分析管线** | extraction → research → synthesis → strategy → critique，每段独立产出、可分别回看 |
+| **批判性审视段** | 独有的 critique 段：对结论做对立面审查，输出"最可能错在哪"，而不是只给乐观答案 |
+| **BYOK 模式** | 模型 Key 由用户自备，成本自控；无 Key 时按本地兜底模式运行 |
+| **配额与兜底** | 每用户每日 3 次，超限本地兜底——独立开发者的成本控制范式 |
+| **长任务不断线** | 分析任务跑在持久化执行引擎上，自动重试、断点恢复，刷新不丢结果 |
+| · 邮箱验证闭环 | 注册-验证-登录全流程，QQ SMTP 统一发信 |
 
-> FastAPI 后端（五段 BD 分析管线），部署于阿里云 ECS，经 Nginx 反代，DNS 走 Cloudflare（DNS-only 直连）。
-> 编排底座：Temporal（[temporal.sy-realm.ltd](http://temporal.sy-realm.ltd) 可视化 Workflow 执行）。
+---
 
+## 技术与特色
 
+| 层 | 选型 |
+|---|---|
+| 前端 | React 19 · Vite 8 · Tailwind CSS 4 · React Router 7 |
+| 后端 | FastAPI · Pydantic v2 · SQLite |
+| 任务编排 | 持久化工作流引擎（五段顺序编排、自动重试、状态可查询） |
+| LLM 接入 | 统一网关 + 用户级配额；openclaw_core 共享库 |
+
+**工程特色**：
+
+- **前端零依赖路由框架之外的状态管理**——单页工具，views/ 目录自管视图，不引不需要的能力
+- **LLM 调用统一走网关**：超时、重试、配额一处收敛，产品代码不各自造轮子
+- **构建链保鲜**：Vite 8（Rolldown 内核）+ plugin-react 6，冷启动与 HMR 为当前代事实标准
+
+---
 
 © Cardio · MiLab-Bit
