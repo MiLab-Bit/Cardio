@@ -18,7 +18,6 @@ from typing import Any
 from . import config
 from .auth import verify_password
 
-
 DEFAULT_OWNER = "default"
 
 
@@ -328,9 +327,6 @@ def list_model_providers(owner_id: str) -> list[dict[str, Any]]:
         ).fetchall()
     out = []
     for r in rows:
-        masked = ""
-        if r["provider"]:
-            pass  # 不在此处解密
         out.append({
             "id": r["id"], "slot": r["slot"], "name": r["name"], "provider": r["provider"],
             "base_url": r["base_url"], "model": r["model"], "status": r["status"],

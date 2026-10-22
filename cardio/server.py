@@ -19,17 +19,14 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from . import auth as auth_lib
-from . import config, store
-from . import email_utils
-from . import llm
+from . import config, email_utils, llm, store
+from .cardscan import card_to_text, extract_card
 from .pipeline import STAGE_META, run_pipeline
-from .cardscan import extract_card, card_to_text
 
 app = FastAPI(title="Cardio API", version="0.3.0")
 
@@ -301,7 +298,7 @@ async def mp_create(request: Request):
 
 @app.post("/api/model-providers/test")
 async def mp_test(request: Request):
-    ident = get_current_user(request)
+    get_current_user(request)
     data = await request.json()
     provider = (data.get("provider") or "").strip()
     api_key = (data.get("apiKey") or data.get("api_key") or "").strip()

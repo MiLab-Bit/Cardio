@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from . import config, llm
+from . import llm
 
 CARD_FIELDS = [
     "name", "title", "company", "department",

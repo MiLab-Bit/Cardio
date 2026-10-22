@@ -12,7 +12,6 @@ import json
 import os
 import secrets
 import time
-from typing import Any
 
 
 def _b64u(b: bytes) -> str:

@@ -1,15 +1,16 @@
 """Cardio Temporal Worker（统一到 openclaw_core.temporal.run_worker）。"""
 from __future__ import annotations
 
+from openclaw_core.temporal import run_worker
+
 from cardio.temporal.activities import (
+    critique_activity,
     extraction_activity,
     research_activity,
-    synthesis_activity,
     strategy_activity,
-    critique_activity,
+    synthesis_activity,
 )
 from cardio.temporal.workflows.analyze import CardioAnalyzeWorkflow
-from openclaw_core.temporal import run_worker
 
 
 def run() -> None:

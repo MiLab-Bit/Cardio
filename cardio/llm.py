@@ -10,9 +10,9 @@ from contextvars import ContextVar
 from typing import AsyncIterator
 
 from openai import AsyncOpenAI
+from openclaw_core.gateway import Gateway, QuotaExceeded
 
 from . import config
-from openclaw_core.gateway import Gateway, QuotaExceeded, extract_json
 
 # 向后兼容别名（Gateway 超限抛 QuotaExceeded）
 LLMQuotaExceeded = QuotaExceeded

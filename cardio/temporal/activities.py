@@ -1,7 +1,9 @@
 """Cardio Temporal Activities — 五段管线各阶段封装。"""
 from __future__ import annotations
-import asyncio, json
+
+import json
 from typing import Any
+
 from temporalio import activity
 
 
@@ -14,7 +16,7 @@ def _heartbeat(*d: str) -> None:
 
 async def _llm_call(system: str, user: str, provider: dict | None = None, owner: str = "") -> dict:
     """共用 LLM 调用。"""
-    from cardio import llm, config
+    from cardio import config, llm
     llm.set_scope(owner or "anon")
     client = llm.client_for(provider)
     resp = await client.chat.completions.create(
