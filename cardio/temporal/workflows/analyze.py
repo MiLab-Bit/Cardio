@@ -3,10 +3,13 @@
 extraction -> research -> synthesis -> strategy -> critique
 """
 from __future__ import annotations
+
 from datetime import timedelta
 from typing import Any
+
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+
 from cardio.temporal.common import AnalyzeInput
 
 _ACT_TIMEOUT = timedelta(minutes=3)
