@@ -1,19 +1,27 @@
-"""AnalyzeWorkflow — Cardio 五段管线（Temporal 底座）。
+"""AnalyzeWorkflow — Cardio 五段管线（Temporal 底座，单一执行路径）。
 
 extraction -> research -> synthesis -> strategy -> critique
+编排 / 进度 emit / 结果包装都在这里；LLM 调用在 activities 中。
+strategy 段输入 = 画像 + 原始信息；critique 段输入 = 档案 + 画像 + 策略（不含 research），
+与产品设计一致，避免与旧 run_pipeline 逻辑漂移。
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
+from cardio.pipeline import STAGE_META
 from cardio.temporal.common import AnalyzeInput
 
 _ACT_TIMEOUT = timedelta(minutes=3)
 _ACT_RETRY = RetryPolicy(maximum_attempts=3)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 @workflow.defn(name="CardioAnalyzeWorkflow")
@@ -23,52 +31,99 @@ class CardioAnalyzeWorkflow:
         self.status: str = "running"
         self.results: dict[str, Any] = {}
 
-    def _emit(self, stage: str, pct: float, msg: str = "") -> None:
-        self.progress.append({"stage": stage, "progress": pct, "message": msg})
+    def _emit(self, event: str, stage: str, **extra: Any) -> None:
+        self.progress.append({"event": event, "stage": stage, **extra})
+
+    def _details(self, stage: str) -> dict[str, Any]:
+        return (self.results.get(stage) or {}).get("details", {})
+
+    def _build_payload(self, name: str, inp: AnalyzeInput) -> dict[str, Any]:
+        base = {"provider": inp.provider, "owner": inp.owner}
+        if name == "extraction":
+            return {"raw_text": inp.raw_text, **base}
+        if name == "research":
+            return {"extraction": self._details("extraction"), **base}
+        if name == "synthesis":
+            return {
+                "extraction": self._details("extraction"),
+                "research": self._details("research"),
+                **base,
+            }
+        if name == "strategy":
+            return {
+                "synthesis": self._details("synthesis"),
+                "raw_text": inp.raw_text,
+                **base,
+            }
+        if name == "critique":
+            return {
+                "extraction": self._details("extraction"),
+                "synthesis": self._details("synthesis"),
+                "strategy": self._details("strategy"),
+                **base,
+            }
+        raise ValueError(f"unknown stage {name}")
+
+    def _wrap(self, name: str, details: dict[str, Any]) -> dict[str, Any]:
+        meta = STAGE_META[name]
+        return {
+            "agent_name": name,
+            "label": meta["label"],
+            "summary": (details or {}).get("summary", f"{meta['label']}完成"),
+            "details": details or {},
+            "confidence": (details or {}).get("confidence", 0.0),
+            "generated_at": _now(),
+        }
+
+    def _final(self, inp: AnalyzeInput) -> dict[str, Any]:
+        ext = self._details("extraction")
+        profile = {
+            "name": ext.get("name", ""),
+            "title": ext.get("title", ""),
+            "company": ext.get("company", ""),
+            "phone": ext.get("phone", ""),
+            "email": ext.get("email", ""),
+            "industry": ext.get("industry", ""),
+            "needs": ext.get("needs", []),
+            "tags": ext.get("tags", []),
+        }
+        return {
+            "input_text": inp.raw_text,
+            "profile": profile,
+            "agent_reports": self.results,
+            "completed_at": _now(),
+        }
 
     @workflow.run
     async def run(self, inp: AnalyzeInput) -> dict[str, Any]:
-        self._emit("init", 2.0, "接收客户信息")
-        shared = {"raw_text": inp.raw_text, "provider": inp.provider, "owner": inp.owner}
-
-        # 1) extraction
-        self._emit("extraction", 20.0, "信息提取")
-        self.results["extraction"] = await workflow.execute_activity(
-            "extraction", shared,
-            start_to_close_timeout=_ACT_TIMEOUT, retry_policy=_ACT_RETRY,
-        )
-
-        # 2) research
-        self._emit("research", 40.0, "背景调研")
-        self.results["research"] = await workflow.execute_activity(
-            "research", {**shared, "extraction": self.results["extraction"]},
-            start_to_close_timeout=_ACT_TIMEOUT, retry_policy=_ACT_RETRY,
-        )
-
-        # 3) synthesis
-        self._emit("synthesis", 60.0, "画像合成")
-        self.results["synthesis"] = await workflow.execute_activity(
-            "synthesis", {**shared, "extraction": self.results["extraction"], "research": self.results["research"]},
-            start_to_close_timeout=_ACT_TIMEOUT, retry_policy=_ACT_RETRY,
-        )
-
-        # 4) strategy
-        self._emit("strategy", 80.0, "BD 策略")
-        self.results["strategy"] = await workflow.execute_activity(
-            "strategy", {**shared, "synthesis": self.results["synthesis"], "extraction": self.results["extraction"]},
-            start_to_close_timeout=_ACT_TIMEOUT, retry_policy=_ACT_RETRY,
-        )
-
-        # 5) critique
-        self._emit("critique", 95.0, "风险审核")
-        self.results["critique"] = await workflow.execute_activity(
-            "critique", {**self.results, "provider": inp.provider},
-            start_to_close_timeout=_ACT_TIMEOUT, retry_policy=_ACT_RETRY,
-        )
+        self._emit("init", "init", progress=2.0, message="接收客户信息")
+        # (stage, 完成百分比)
+        stages = [
+            ("extraction", 20.0),
+            ("research", 40.0),
+            ("synthesis", 60.0),
+            ("strategy", 80.0),
+            ("critique", 95.0),
+        ]
+        for name, pct in stages:
+            meta = STAGE_META[name]
+            self._emit(
+                "stage_start", name, label=meta["label"],
+                agent=meta["agent"], progress=max(pct - 15.0, 1.0),
+            )
+            result = await workflow.execute_activity(
+                name,
+                self._build_payload(name, inp),
+                start_to_close_timeout=_ACT_TIMEOUT,
+                retry_policy=_ACT_RETRY,
+            )
+            report = self._wrap(name, result)
+            self.results[name] = report
+            self._emit("stage_done", name, report=report, progress=pct)
 
         self.status = "completed"
-        self._emit("done", 100.0, "分析完成")
-        return self._snapshot()
+        self._emit("done", "done", progress=100.0, message="分析完成")
+        return self._final(inp)
 
     @workflow.query
     def get_progress(self) -> list[dict[str, Any]]:
@@ -80,7 +135,4 @@ class CardioAnalyzeWorkflow:
 
     @workflow.query
     def get_snapshot(self) -> dict[str, Any]:
-        return self._snapshot()
-
-    def _snapshot(self) -> dict[str, Any]:
         return {"status": self.status, "progress": self.progress, "results": self.results}

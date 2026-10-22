@@ -19,14 +19,30 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from temporalio.client import Client
+from temporalio.exceptions import ApplicationError
+
+from cardio.temporal.common import AnalyzeInput
+from cardio.temporal.workflows.analyze import CardioAnalyzeWorkflow
 
 from . import auth as auth_lib
 from . import config, email_utils, llm, store
 from .cardscan import card_to_text, extract_card
-from .pipeline import STAGE_META, run_pipeline
+from .pipeline import STAGE_META
+
+# ── Temporal client（懒加载，首次 analyze 时连接）──
+_temporal_client = None
+
+async def get_temporal_client():
+    global _temporal_client
+    if _temporal_client is None:
+        _temporal_client = await Client.connect("127.0.0.1:7233", namespace="cardio")
+    return _temporal_client
+
 
 app = FastAPI(title="Cardio API", version="0.3.0")
 
@@ -389,15 +405,8 @@ async def analyze(request: Request):
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue(maxsize=200)
 
-        async def on_progress(stage: str, data: dict) -> None:
-            try:
-                await queue.put((stage, data))
-            except asyncio.QueueFull:
-                pass
-
         async def run():
             nonlocal contact_id
-            llm.set_scope(owner)
             try:
                 effective_text = text
                 if image:
@@ -414,17 +423,54 @@ async def analyze(request: Request):
                             "tags": card.get("tags"),
                             "notes": card.get("raw_text", ""),
                         })
-                        contact_id = contact["id"]
+                        contact_id = contact['id']
                         await queue.put(("contact_saved", {"contact": contact}))
                         card_text = card_to_text(card)
                         if card_text:
                             effective_text = (card_text + "\n\n" + text).strip() if text else card_text
                     except Exception as exc:  # noqa: BLE001
                         await queue.put(("vision_error", {"error": str(exc)}))
-                result = await run_pipeline(effective_text, on_progress=on_progress, provider=text_provider)
-                store.save_analysis(owner, effective_text, result, contact_id=contact_id)
-            except llm.LLMQuotaExceeded:
-                await queue.put(("error", {"error": "今日 AI 额度已用完（每用户每日 3 次），明日重置；也可配置自己的模型 Key"}))
+                # 启动 Temporal 五段工作流（持久化 / 自动重试 / 断点可查）
+                client = await get_temporal_client()
+                handle = await client.start_workflow(
+                    CardioAnalyzeWorkflow.run,
+                    AnalyzeInput(
+                        raw_text=effective_text,
+                        raw_type="text",
+                        provider=text_provider,
+                        owner=owner,
+                    ),
+                    id=f"cardio-{owner}-{uuid.uuid4().hex}",
+                    task_queue="cardio-task-queue",
+                )
+                seen = 0
+                while True:
+                    snap = await handle.query(CardioAnalyzeWorkflow.get_snapshot)
+                    for item in snap.get('progress', [])[seen:]:
+                        ev = item.get('event')
+                        if ev == 'stage_start':
+                            await queue.put(("stage_start", {
+                                "stage": item["stage"],
+                                "label": item.get("label", ""),
+                                "agent": item.get("agent", ""),
+                            }))
+                        elif ev == 'stage_done':
+                            await queue.put(("stage_done", {
+                                "stage": item["stage"],
+                                "report": item.get("report", {}),
+                            }))
+                        seen += 1
+                    if snap.get('status') == 'completed':
+                        break
+                    await asyncio.sleep(1.0)
+                final = await handle.result()
+                store.save_analysis(owner, effective_text, final, contact_id=contact_id)
+                await queue.put(("complete", {"result": final}))
+            except ApplicationError as exc:
+                if exc.type == 'QuotaExceeded':
+                    await queue.put(("error", {"error": "今日 AI 额度已用完（每用户每日 3 次），明日重置；也可配置自己的模型 Key"}))
+                else:
+                    await queue.put(("error", {"error": str(exc)}))
             except Exception as exc:  # noqa: BLE001
                 await queue.put(("error", {"error": str(exc)}))
             finally:
