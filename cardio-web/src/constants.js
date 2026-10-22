@@ -1,10 +1,10 @@
 // 全局常量：导航与五段管线定义
 
 export const NAV = [
-  { key: 'chat', label: '商枢对话', icon: 'Compass', desc: '随时问、随手记' },
-  { key: 'analyze', label: '数字商册分析', icon: 'ScanSearch', desc: '名片/会议 → 五段研判' },
-  { key: 'contacts', label: '商册名录', icon: 'Users', desc: '你的人脉库' },
+  { key: 'analyze', label: '五段研判', icon: 'ScanSearch', desc: '名片/会议 → 结构化研判' },
+  { key: 'contacts', label: '商册通讯录', icon: 'Users', desc: '客户档案 · 研判输入入口' },
   { key: 'history', label: '历史研判', icon: 'History', desc: '过往分析记录' },
+  { key: 'chat', label: '商枢·AI 咨询', icon: 'Compass', desc: '伴随研判的商务助手' },
   { key: 'providers', label: '模型配置', icon: 'Boxes', desc: '自带大模型 Key' },
   { key: 'settings', label: '设置', icon: 'Settings', desc: '后端地址等' },
 ]

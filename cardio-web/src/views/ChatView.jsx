@@ -1,11 +1,11 @@
-// 商枢对话（SSE 流式）
+// 商枢·AI 咨询（SSE 流式）
 import { useEffect, useRef, useState } from 'react'
 import { Send, Loader2, Trash2, Compass } from 'lucide-react'
 import { chatStream, AuthError } from '../api.js'
 
 const GREETING = {
   role: 'assistant',
-  content: '我是商枢，你的数字商册助手。把客户或会议信息告诉我，我帮你记下来，也能用「数字商册分析」做深度研判。',
+  content: '我是商枢，你的 AI 咨询助手。把客户或会议信息告诉我，我帮你记下来，也能用「五段研判」做深度研判。',
 }
 
 export default function ChatView() {
