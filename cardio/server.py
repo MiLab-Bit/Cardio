@@ -32,7 +32,7 @@ from cardio.temporal.workflows.analyze import CardioAnalyzeWorkflow
 from . import auth as auth_lib
 from . import config, email_utils, llm, store
 from .cardscan import card_to_text, extract_card
-from .pipeline import STAGE_META
+from .prompts import STAGE_META
 
 # ── Temporal client（懒加载，首次 analyze 时连接）──
 _temporal_client = None

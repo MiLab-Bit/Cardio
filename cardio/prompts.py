@@ -1,26 +1,19 @@
-"""Cardio 五段式商务分析流水线 — 全部基于 Qwen-flash。
+"""Cardio 五段管线 prompt 与阶段元数据 —— 版本化单一真相源。
 
-改进（2026-10-05）：
-  - 每个 SYSTEM prompt 加优先级标注（准确 > 完整 > 文采）
-  - research 段强制标注 [推断]/[待核实]
-  - critique 段给审核 checklist
-  - temperature 分段控制
-  - 每段加"不确定时怎么办"的明确指引
+演进方式：在 PROMPT_VERSIONS 中新增 "v2" 并切换 ACTIVE_PROMPT_VERSION，
+即可换 prompt / 做 A-B，无需改动 activities / workflow 的编排逻辑。
+质量评估与"敢说问题"打分见 tests/eval/。
 """
 from __future__ import annotations
-
-from typing import Callable
-
-ProgressFn = Callable[[str, dict], None]
 
 STAGE_ORDER = ["extraction", "research", "synthesis", "strategy", "critique"]
 
 STAGE_META = {
-    "extraction": {"label": "信息提取", "agent": "提取官", "icon": "\U0001faaa"},
-    "research":   {"label": "背景调研", "agent": "调研员", "icon": "\U0001f52d"},
-    "synthesis":  {"label": "画像合成", "agent": "画像师", "icon": "\U0001f9ed"},
-    "strategy":   {"label": "BD 策略", "agent": "谋士",   "icon": "\u265f\ufe0f"},
-    "critique":   {"label": "风险审核", "agent": "审官",   "icon": "\U0001f6e1\ufe0f"},
+    "extraction": {"label": "信息提取", "agent": "提取官", "icon": "🪪"},
+    "research":   {"label": "背景调研", "agent": "调研员", "icon": "🔭"},
+    "synthesis":  {"label": "画像合成", "agent": "画像师", "icon": "🧭"},
+    "strategy":   {"label": "BD 策略", "agent": "谋士",   "icon": "♟️"},
+    "critique":   {"label": "风险审核", "agent": "审官",   "icon": "🛡️"},
 }
 
 # 每段 temperature：事实段低（准确）、策略段中（务实）、审核段极低（稳定）
@@ -32,10 +25,12 @@ STAGE_TEMPERATURES = {
     "critique":   0.1,
 }
 
-
-
-
-SYSTEM_EXTRACTION = """你是 Cardio 数字商册的「提取官」。
+# ==================================================================
+# Prompt 版本库（2026-10-05 基线：优先级标注 / [推断][待核实] / 审核 checklist / 分段温度）
+# ==================================================================
+PROMPT_VERSIONS = {
+    "v1": {
+        "extraction": """你是 Cardio 数字商册的「提取官」。
 
 【最高优先级】准确 > 完整 > 简洁。宁可留空也不猜。
 
@@ -47,9 +42,9 @@ SYSTEM_EXTRACTION = """你是 Cardio 数字商册的「提取官」。
 输出 JSON（不要 markdown，不要解释）：
 {"name":str,"title":str,"company":str,"phone":str,"email":str,"industry":str,"needs":[str],"tags":[str],"summary":str,"confidence":float}
 
-confidence 含义：你有多大把握提取是准确的（0.0-1.0）。信息越少越低。"""
+confidence 含义：你有多大把握提取是准确的（0.0-1.0）。信息越少越低。""",
 
-SYSTEM_RESEARCH = """你是 Cardio 的「调研员」。
+        "research": """你是 Cardio 的「调研员」。
 
 【最高优先级】区分事实与推断，绝不在没有依据时做确定性断言。
 
@@ -63,9 +58,9 @@ SYSTEM_RESEARCH = """你是 Cardio 的「调研员」。
 4. suggested_sources 给出"去哪里验证"的建议（如"查其官网新闻页""看天眼查司法风险"）。
 
 输出 JSON（不要 markdown，不要解释）：
-{"company_profile":str,"industry_trends":[str],"pain_points":[str],"opportunities":[str],"suggested_sources":[str],"summary":str,"confidence":float}"""
+{"company_profile":str,"industry_trends":[str],"pain_points":[str],"opportunities":[str],"suggested_sources":[str],"summary":str,"confidence":float}""",
 
-SYSTEM_SYNTHESIS = """你是 Cardio 的「画像师」。
+        "synthesis": """你是 Cardio 的「画像师」。
 
 【最高优先级】画像必须可追溯——每个结论对应前面的哪段输入。
 
@@ -79,9 +74,9 @@ SYSTEM_SYNTHESIS = """你是 Cardio 的「画像师」。
 3. relationship_hint 给出一句具体建议（如"通过 XX 活动建立初次联系"），不要空话。
 
 输出 JSON（不要 markdown，不要解释）：
-{"enriched_profile":{},"intent_score":float,"customer_level":str,"relationship_hint":str,"summary":str,"confidence":float}"""
+{"enriched_profile":{},"intent_score":float,"customer_level":str,"relationship_hint":str,"summary":str,"confidence":float}""",
 
-SYSTEM_STRATEGY = """你是 Cardio 的「谋士」。
+        "strategy": """你是 Cardio 的「谋士」。
 
 【最高优先级】策略必须具体可执行，不要正确的废话。
 
@@ -93,9 +88,9 @@ SYSTEM_STRATEGY = """你是 Cardio 的「谋士」。
 5. 如果客户信息太少无法给策略，直接在 summary 里说"信息不足，建议先做 XX"，不要硬编。
 
 输出 JSON（不要 markdown，不要解释）：
-{"next_steps":[str],"talking_points":[str],"channels":[str],"follow_up_timing":str,"proposal_idea":str,"summary":str,"confidence":float}"""
+{"next_steps":[str],"talking_points":[str],"channels":[str],"follow_up_timing":str,"proposal_idea":str,"summary":str,"confidence":float}""",
 
-SYSTEM_CRITIQUE = """你是 Cardio 的「审官」。
+        "critique": """你是 Cardio 的「审官」。
 
 【最高优先级】独立审核，不迎合前面的结论，敢于说"有问题"。
 
@@ -110,16 +105,16 @@ SYSTEM_CRITIQUE = """你是 Cardio 的「审官」。
 - passed = false 时必须在 advice 里给出"怎么修"
 
 输出 JSON（不要 markdown，不要解释）：
-{"risk_alerts":[str],"trust_score":float,"passed":bool,"missing_info":[str],"advice":str,"summary":str}"""
-
-_SYSTEMS = {
-    "extraction": SYSTEM_EXTRACTION,
-    "research": SYSTEM_RESEARCH,
-    "synthesis": SYSTEM_SYNTHESIS,
-    "strategy": SYSTEM_STRATEGY,
-    "critique": SYSTEM_CRITIQUE,
+{"risk_alerts":[str],"trust_score":float,"passed":bool,"missing_info":[str],"advice":str,"summary":str}""",
+    },
 }
 
+ACTIVE_PROMPT_VERSION = "v1"
 
-
-
+# 便捷导出：当前激活版本的各段 SYSTEM prompt（供 activities 直接引用）
+_SYSTEMS = PROMPT_VERSIONS[ACTIVE_PROMPT_VERSION]
+SYSTEM_EXTRACTION = _SYSTEMS["extraction"]
+SYSTEM_RESEARCH = _SYSTEMS["research"]
+SYSTEM_SYNTHESIS = _SYSTEMS["synthesis"]
+SYSTEM_STRATEGY = _SYSTEMS["strategy"]
+SYSTEM_CRITIQUE = _SYSTEMS["critique"]
