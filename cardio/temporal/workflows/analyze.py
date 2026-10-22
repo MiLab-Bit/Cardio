@@ -13,7 +13,7 @@ from typing import Any
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from cardio.pipeline import STAGE_META
+from cardio.prompts import ACTIVE_PROMPT_VERSION, STAGE_META
 from cardio.temporal.common import AnalyzeInput
 
 _ACT_TIMEOUT = timedelta(minutes=3)
@@ -92,6 +92,7 @@ class CardioAnalyzeWorkflow:
             "profile": profile,
             "agent_reports": self.results,
             "completed_at": _now(),
+            "prompt_version": ACTIVE_PROMPT_VERSION,
         }
 
     @workflow.run
