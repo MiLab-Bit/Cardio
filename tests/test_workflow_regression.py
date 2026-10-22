@@ -5,9 +5,21 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+import pytest
+from temporalio import workflow as _temporal_workflow
+
 from cardio import prompts as P
 from cardio.temporal.common import AnalyzeInput
 from cardio.temporal.workflows import analyze as WF
+
+
+@pytest.fixture(autouse=True)
+def _patch_workflow_now(monkeypatch):
+    """测试环境无 Temporal 运行时：patch workflow.now() 为固定确定性时间。"""
+    fixed = datetime(2026, 10, 22, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(_temporal_workflow, "now", lambda: fixed)
 
 
 def _wf() -> WF.CardioAnalyzeWorkflow:
