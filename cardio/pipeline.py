@@ -9,11 +9,7 @@
 """
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
-from typing import Any, Callable
-
-from . import llm
+from typing import Callable
 
 ProgressFn = Callable[[str, dict], None]
 
@@ -37,8 +33,6 @@ STAGE_TEMPERATURES = {
 }
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 SYSTEM_EXTRACTION = """你是 Cardio 数字商册的「提取官」。
@@ -127,91 +121,5 @@ _SYSTEMS = {
 }
 
 
-async def _stage(stage: str, user_prompt: str, provider: dict | None = None) -> dict[str, Any]:
-    """执行单段调用，使用该段专属的 temperature。"""
-    text = await llm.chat(
-        [{"role": "system", "content": _SYSTEMS[stage]},
-         {"role": "user", "content": user_prompt}],
-        model=llm.config.LLM_MODEL,
-        temperature=STAGE_TEMPERATURES.get(stage, 0.3),
-        provider=provider,
-    )
-    return llm.extract_json(text)
 
 
-async def run_pipeline(
-    text: str,
-    on_progress: ProgressFn | None = None,
-    provider: dict | None = None,
-) -> dict[str, Any]:
-    """执行五段式流水线，按阶段回调进度。返回完整结果。"""
-    async def emit(stage: str, data: dict) -> None:
-        if on_progress is None:
-            return
-        import asyncio
-        if asyncio.iscoroutinefunction(on_progress):
-            await on_progress(stage, data)
-        else:
-            on_progress(stage, data)
-
-    await emit("pipeline_start", {})
-
-    reports: dict[str, Any] = {}
-
-    for stage in STAGE_ORDER:
-        meta = STAGE_META[stage]
-        await emit("stage_start", {"stage": stage, "label": meta["label"], "agent": meta["agent"]})
-
-        if stage == "extraction":
-            user_prompt = f"商务信息如下：\n{text}"
-        elif stage == "research":
-            user_prompt = "客户档案：\n" + json.dumps(reports.get("extraction", {}), ensure_ascii=False)
-        elif stage == "synthesis":
-            user_prompt = (
-                "客户档案：\n" + json.dumps(reports.get("extraction", {}), ensure_ascii=False) + "\n"
-                "调研结果：\n" + json.dumps(reports.get("research", {}), ensure_ascii=False)
-            )
-        elif stage == "strategy":
-            user_prompt = (
-                "客户画像：\n" + json.dumps(reports.get("synthesis", {}), ensure_ascii=False) + "\n"
-                "原始信息：\n" + text
-            )
-        else:  # critique
-            user_prompt = (
-                "客户档案：" + json.dumps(reports.get("extraction", {}), ensure_ascii=False) + "\n"
-                "画像：" + json.dumps(reports.get("synthesis", {}), ensure_ascii=False) + "\n"
-                "策略：" + json.dumps(reports.get("strategy", {}), ensure_ascii=False)
-            )
-
-        result = await _stage(stage, user_prompt, provider=provider)
-        result = {
-            "agent_name": stage,
-            "label": meta["label"],
-            "summary": result.get("summary", f"{meta['label']}完成"),
-            "details": result,
-            "confidence": result.get("confidence", 0.0),
-            "generated_at": _now(),
-        }
-        reports[stage] = result
-        await emit("stage_done", {"stage": stage, "report": result})
-
-    ext = reports.get("extraction", {}).get("details", {})
-    profile = {
-        "name": ext.get("name", ""),
-        "title": ext.get("title", ""),
-        "company": ext.get("company", ""),
-        "phone": ext.get("phone", ""),
-        "email": ext.get("email", ""),
-        "industry": ext.get("industry", ""),
-        "needs": ext.get("needs", []),
-        "tags": ext.get("tags", []),
-    }
-
-    final = {
-        "input_text": text,
-        "profile": profile,
-        "agent_reports": reports,
-        "completed_at": _now(),
-    }
-    await emit("complete", {"result": final})
-    return final
