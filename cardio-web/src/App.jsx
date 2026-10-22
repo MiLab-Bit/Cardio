@@ -18,7 +18,7 @@ const NAV_KEYS = new Set(NAV.map((n) => n.key))
 /** 从 pathname 派生当前视图：'/contacts' → 'contacts'；未知路径回退 chat */
 function viewFromPath(pathname) {
   const key = pathname.replace(/^\/+/, '').split('/')[0]
-  return NAV_KEYS.has(key) ? key : 'chat'
+  return NAV_KEYS.has(key) ? key : 'analyze'
 }
 
 export default function App() {

@@ -27,7 +27,7 @@ export default function Sidebar({ user, onLogout, mobileOpen, onCloseMobile }) {
           <img src="/logo-cardio.jpg" alt="Card.io" className="w-10 h-10 rounded-lg object-cover shadow" />
           <div className="min-w-0 flex-1">
             <div className="font-serif text-xl font-bold tracking-wide">Card.io</div>
-            <div className="text-[11px] text-brass/80">新时代的数字商册</div>
+            <div className="text-[11px] text-brass/80">数字商册 · 结构化研判</div>
           </div>
           <button className="md:hidden text-parchment/60 hover:text-parchment" onClick={onCloseMobile} aria-label="关闭菜单">
             <X size={18} />
@@ -92,7 +92,7 @@ export default function Sidebar({ user, onLogout, mobileOpen, onCloseMobile }) {
         </div>
 
         <div className="px-4 pb-3 text-[11px] text-parchment/40 leading-relaxed">
-          商枢为你记录每一次相遇，连接天下商缘。
+          Card.io · 把每一次相遇，沉淀为可决策的研判。
         </div>
       </aside>
     </>
