@@ -7,7 +7,7 @@ strategy 段输入 = 画像 + 原始信息；critique 段输入 = 档案 + 画�
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any
 
 from temporalio import workflow
@@ -20,8 +20,13 @@ _ACT_TIMEOUT = timedelta(minutes=3)
 _ACT_RETRY = RetryPolicy(maximum_attempts=3)
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _now_iso() -> str:
+    """工作流内时间戳必须走 workflow.now()（Temporal 确定性时钟）。
+
+    datetime.now() 会被 workflow 沙箱拦截（RestrictedWorkflowAccessError），
+    且非确定性值会破坏重放一致性。
+    """
+    return workflow.now().isoformat()
 
 
 @workflow.defn(name="CardioAnalyzeWorkflow")
@@ -72,7 +77,7 @@ class CardioAnalyzeWorkflow:
             "summary": (details or {}).get("summary", f"{meta['label']}完成"),
             "details": details or {},
             "confidence": (details or {}).get("confidence", 0.0),
-            "generated_at": _now(),
+            "generated_at": _now_iso(),
         }
 
     def _final(self, inp: AnalyzeInput) -> dict[str, Any]:
@@ -91,7 +96,7 @@ class CardioAnalyzeWorkflow:
             "input_text": inp.raw_text,
             "profile": profile,
             "agent_reports": self.results,
-            "completed_at": _now(),
+            "completed_at": _now_iso(),
             "prompt_version": ACTIVE_PROMPT_VERSION,
         }
 
