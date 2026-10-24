@@ -1,4 +1,4 @@
-"""Cardio LLM 客户端 — 委托 openclaw_core.gateway.Gateway。
+"""Cardio LLM 客户端 — 委托 hermes_core.gateway.Gateway。
 
 配额门控 / 并发闸门 / 指数退避 / 响应缓存 / JSON 解析全部下沉到共享库，
 本文件只保留产品级对外符号（chat / vision_chat / test_provider /
@@ -10,7 +10,7 @@ from contextvars import ContextVar
 from typing import AsyncIterator
 
 from openai import AsyncOpenAI
-from openclaw_core.gateway import Gateway, QuotaExceeded
+from hermes_core.gateway import Gateway, QuotaExceeded
 
 from . import config
 

@@ -105,7 +105,7 @@ cd cardio-web && pnpm install && pnpm dev
 | 前端 | React 19 · Vite 8 · Tailwind CSS 4 · React Router 7 |
 | 后端 | FastAPI · Pydantic v2 · SQLite |
 | 任务编排 | 持久化工作流引擎（五段顺序编排、自动重试、状态可查询） |
-| LLM 接入 | 统一网关 + 用户级配额；openclaw_core 共享库 |
+| LLM 接入 | 统一网关 + 用户级配额；hermes_core 共享库 |
 
 **工程特色**：
 

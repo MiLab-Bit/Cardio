@@ -1,6 +1,6 @@
 """Cardio Temporal Activities — 五段管线各阶段封装。
 
-所有 LLM 调用统一走 openclaw_core.gateway（经由 cardio.llm.chat），
+所有 LLM 调用统一走 hermes_core.gateway（经由 cardio.llm.chat），
 确保配额门控 / 并发闸门 / 重试 / 缓存 / BYOK 在五段路径上全部生效
 （早期直连 AsyncOpenAI 会绕过配额，已在统一后修复）。
 分段 temperature 取自 prompts.STAGE_TEMPERATURES，与产品承诺一致。
