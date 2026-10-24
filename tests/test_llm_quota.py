@@ -1,8 +1,8 @@
 """Cardio LLM 配额/缓存/BYOK 集成测试 — 不调 LLM（打桩 Gateway 客户端）。
 
-cardio.llm 现已委托 openclaw_core.gateway.Gateway；本测试只替换 Gateway 的
+cardio.llm 现已委托 hermes_core.gateway.Gateway；本测试只替换 Gateway 的
 客户端构造与配额/缓存存储，验证 cardio.llm 这一层的配额门、BYOK 跳过、
-缓存命中不计量行为（真实网关逻辑在 openclaw_core 黄金测试中覆盖）。
+缓存命中不计量行为（真实网关逻辑在 hermes_core 黄金测试中覆盖）。
 
 运行（仓库根）：venv/bin/python -m pytest tests/ -q
 """
@@ -18,8 +18,8 @@ import pytest
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
-from openclaw_core.gateway import _SqliteCache  # noqa: E402
-from openclaw_core.quota import QuotaGate  # noqa: E402
+from hermes_core.gateway import _SqliteCache  # noqa: E402
+from hermes_core.quota import QuotaGate  # noqa: E402
 
 from cardio import llm  # noqa: E402
 
