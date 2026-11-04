@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -30,15 +31,28 @@ def _load_key() -> bytes:
 
     key = Fernet.generate_key()
     _KEY_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Stage the complete key under a private temporary name. Linking it into
+    # place is atomic: a concurrent API/worker cannot read a zero-byte file.
+    temp_path = None
     try:
-        # Never create a tracked or world-readable key; exclusive creation also
-        # protects concurrent API/worker startup from silently changing keys.
-        fd = os.open(_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        return _KEY_PATH.read_bytes().strip()
-    with os.fdopen(fd, "wb") as handle:
-        handle.write(key)
-    return key
+        with tempfile.NamedTemporaryFile(
+            mode="wb", prefix=".enc_key.", dir=_KEY_PATH.parent, delete=False
+        ) as handle:
+            temp_path = Path(handle.name)
+            os.chmod(temp_path, 0o600)
+            handle.write(key)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temp_path, _KEY_PATH)
+            return key
+        except FileExistsError:
+            existing = _KEY_PATH.read_bytes().strip()
+            Fernet(existing)  # Refuse truncated or invalid keys.
+            return existing
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 _fernet = Fernet(_load_key())
