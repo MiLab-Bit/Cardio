@@ -7,8 +7,8 @@
 from __future__ import annotations
 
 import os
-import tempfile
 import sqlite3
+import tempfile
 from pathlib import Path
 
 from cryptography.fernet import Fernet
