@@ -85,3 +85,32 @@ def test_public_repo_does_not_track_runtime_secret():
         cwd=repo, text=True,
     )
     assert out.strip() == "", "runtime Fernet key must never be tracked"
+
+
+def test_concurrent_key_creator_uses_completed_winner(tmp_path, monkeypatch):
+    """Loser of atomic link race must use the winner's fully written key."""
+    key_path = tmp_path / ".enc_key"
+    winner = Fernet.generate_key()
+    monkeypatch.setattr(crypto, "_KEY_PATH", key_path)
+    monkeypatch.delenv("CARDIO_ENC_KEY", raising=False)
+    monkeypatch.delenv("CARDIO_REQUIRE_ENC_KEY", raising=False)
+
+    def simulate_other_process_link(source, destination):
+        assert Path(source).read_bytes()  # staged key is complete
+        assert destination == key_path
+        key_path.write_bytes(winner)
+        raise FileExistsError("other process installed the key")
+
+    monkeypatch.setattr(crypto.os, "link", simulate_other_process_link)
+    assert crypto._load_key() == winner
+    assert list(tmp_path.glob(".enc_key.*")) == []
+
+
+def test_invalid_preexisting_key_fails_closed(tmp_path, monkeypatch):
+    key_path = tmp_path / ".enc_key"
+    key_path.write_bytes(b"broken")
+    monkeypatch.setattr(crypto, "_KEY_PATH", key_path)
+    monkeypatch.delenv("CARDIO_ENC_KEY", raising=False)
+    monkeypatch.delenv("CARDIO_REQUIRE_ENC_KEY", raising=False)
+    with pytest.raises(ValueError):
+        Fernet(crypto._load_key())
