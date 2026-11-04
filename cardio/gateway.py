@@ -214,36 +214,59 @@ class Gateway:
         key = (provider or {}).get("api_key") if byok else self.platform_api_key
         client = self._client(base or self.platform_base_url, key or "sk-placeholder")
 
-        for attempt in range(self.max_retries):
-            try:
-                async with self._semaphore:
-                    response = await client.chat.completions.create(
+        async def close_client() -> None:
+            # One AsyncOpenAI/httpx client is created per uncached request.
+            # Close it after the response or stream to avoid idle socket leaks.
+            close = getattr(client, "close", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception:
+                    log.warning("LLM HTTP client close failed", exc_info=True)
+
+        async def request(is_stream: bool):
+            for attempt in range(self.max_retries):
+                try:
+                    return await client.chat.completions.create(
                         model=effective_model,
                         messages=messages,
                         temperature=temperature,
                         max_tokens=max_tokens,
-                        stream=stream,
+                        stream=is_stream,
                     )
-                if stream:
-                    async def tokens() -> AsyncIterator[str]:
+                except (APIStatusError, APIConnectionError, APITimeoutError) as exc:
+                    status = getattr(exc, "status_code", None)
+                    transient = status is None or status == 429 or 500 <= status < 600
+                    if not transient or attempt + 1 == self.max_retries:
+                        raise
+                    await asyncio.sleep(min(2 ** attempt, 8))
+            raise RuntimeError("unreachable LLM retry state")
+
+        if stream:
+            async def tokens() -> AsyncIterator[str]:
+                try:
+                    # Limit the entire open SSE stream, not merely the creation
+                    # of the HTTP response object.
+                    async with self._semaphore:
+                        response = await request(True)
                         async for part in response:
                             for choice in getattr(part, "choices", []) or []:
                                 delta = getattr(choice, "delta", None)
                                 if delta and getattr(delta, "content", None):
                                     yield delta.content
-                    return tokens()
+                finally:
+                    await close_client()
+            return tokens()
 
-                content = response.choices[0].message.content or ""
-                if cache_key is not None:
-                    self._cache.put(cache_key, content)
-                return content
-            except (APIStatusError, APIConnectionError, APITimeoutError) as exc:
-                status = getattr(exc, "status_code", None)
-                transient = status is None or status == 429 or 500 <= status < 600
-                if not transient or attempt + 1 == self.max_retries:
-                    raise
-                await asyncio.sleep(min(2 ** attempt, 8))
-        raise RuntimeError("unreachable LLM retry state")
+        try:
+            async with self._semaphore:
+                response = await request(False)
+            content = response.choices[0].message.content or ""
+            if cache_key is not None:
+                self._cache.put(cache_key, content)
+            return content
+        finally:
+            await close_client()
 
     async def test_provider(self, provider: dict) -> dict:
         key = (provider.get("api_key") or "").strip()
