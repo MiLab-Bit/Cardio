@@ -62,7 +62,7 @@ class CardioAnalyzeWorkflow:
         # 5) critique
         self._emit("critique", 95.0, "风险审核")
         self.results["critique"] = await workflow.execute_activity(
-            "critique", {**self.results, "provider": inp.provider},
+            "critique", {**self.results, "provider": inp.provider, "owner": inp.owner},
             start_to_close_timeout=_ACT_TIMEOUT, retry_policy=_ACT_RETRY,
         )
 
