@@ -1,8 +1,8 @@
 """Cardio LLM 配额/缓存/BYOK 集成测试 — 不调 LLM（打桩 Gateway 客户端）。
 
-cardio.llm 现已委托 openclaw_core.gateway.Gateway；本测试只替换 Gateway 的
+cardio.llm 使用仓库内 cardio.gateway.Gateway；本测试只替换 Gateway 的
 客户端构造与配额/缓存存储，验证 cardio.llm 这一层的配额门、BYOK 跳过、
-缓存命中不计量行为（真实网关逻辑在 openclaw_core 黄金测试中覆盖）。
+缓存命中不计量行为（网关行为由本仓库测试覆盖）。
 
 运行（仓库根）：venv/bin/python -m pytest tests/ -q
 """
@@ -18,8 +18,7 @@ import pytest
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
-from openclaw_core.gateway import _SqliteCache  # noqa: E402
-from openclaw_core.quota import QuotaGate  # noqa: E402
+from cardio.gateway import _SqliteCache, QuotaGate  # noqa: E402
 
 from cardio import llm  # noqa: E402
 
@@ -118,3 +117,30 @@ def test_quota_env_unlimited(env, monkeypatch, tmp_path):
     for i in range(5):
         assert _chat(content=f"m{i}") == "fake-llm-response"
     assert len(fc.calls) == 5
+
+
+
+def test_byok_uses_selected_model_instead_of_platform_default(env):
+    fc, _ = env
+    llm.set_scope("private-user")
+    provider = {
+        "api_key": "user-owned-key",
+        "base_url": "https://byok.example/v1",
+        "model": "chosen-research-model",
+    }
+    assert _chat(content="private prompt", provider=provider) == "fake-llm-response"
+    assert fc.calls[-1]["model"] == "chosen-research-model"
+
+
+def test_byok_vision_uses_selected_multimodal_model(env):
+    fc, _ = env
+    llm.set_scope("private-user")
+    result = asyncio.run(
+        llm.vision_chat(
+            "extract text", image_b64="not-real-image",
+            provider={"api_key": "user-vision-key", "model": "chosen-vision-model"},
+        )
+    )
+    assert result == "fake-llm-response"
+    assert fc.calls[-1]["model"] == "chosen-vision-model"
+    assert fc.calls[-1]["messages"][0]["content"][0]["type"] == "image_url"

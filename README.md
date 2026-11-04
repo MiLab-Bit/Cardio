@@ -1,86 +1,76 @@
-# Cardio · BD/销售五段分析管线 Agent
+# Cardio — BD / Sales Intelligence
 
-> **输入一家目标公司或一个机会，Cardio 用五段管线给出结构化研判——提取、调研、综合、策略、批判性审视，一条链路走完。**
+Cardio 将客户与商机材料转化为五阶段商务研判：
 
-Cardio 是一个面向 BD（商务拓展）/ 销售场景的分析服务：把散落在各处的企业信息，压缩成一份可决策的结构化研判。
+**Extraction → Research → Synthesis → Strategy → Critique**
 
-**▶ 立即体验：[https://cardio.sy-realm.ltd](https://cardio.sy-realm.ltd)**
+项目入口：https://cardio.sy-realm.ltd
 
----
+## 当前实际架构（以代码为准）
 
-## 它解决什么问题
+| 层 | 实际执行路径 |
+|---|---|
+| Frontend | React 19 / Vite 8 / pnpm（固定 lockfile） |
+| API | FastAPI / JWT / SQLite；受保护的 Chat、Analyze、Contacts、History |
+| Analyze | 目前由 FastAPI 进程内调用 `cardio.pipeline.run_pipeline`，通过 SSE 推送阶段结果 |
+| LLM | `cardio.gateway`：OpenAI-compatible、BYOK、按用户配额、隔离缓存、可重试请求 |
+| Temporal | 仓库包含原生 Temporal SDK Worker 和五阶段 Workflow；**当前 HTTP Analyze 未提交 Temporal Workflow** |
+| Encryption | `cardio.crypto` 使用 Fernet；生产环境必须采用受控密钥管理 |
 
-BD 跟进的每一步都卡在同样三件事上：**资料散**（财报、新闻、招聘、官网各在一处）、**研判慢**（读完全部材料半天过去）、**结论软**（"感觉靠谱"支撑不了上会）。
+### 明确的产品边界
 
-Cardio 把这三步变成一条五段管线：
+- `Research` 阶段目前是模型对输入的分析推断，**不执行实时联网搜索**；需要进一步核实的事实必须标注。
+- `Critique` 是实际第五阶段，但“能够减少事实错误”的效果仍待对照评测。
+- API 分析目前不是 Temporal 承载的持久任务；进程中断后可能丢失尚未完成的运行。
+- 平台模型调用受每日配额限制；超限返回明确错误，**不会静默切换成假结果或无成本本地模型**。
+- BYOK 优先使用用户保存的模型配置，平台调用与 BYOK 的计费语义分开。
+- `/health` 是检查点，不代表外部模型和 Temporal 全链路业务已通过。
 
-```
-extraction → research → synthesis → strategy → critique
-  提取关键信息   深度调研    综合研判     策略建议    批判性审视
-```
+## 本地开发
 
-- **提取**：从目标企业资料中抽取关键信息，形成结构化事实底稿
-- **调研**：围绕底稿做深度调研，补充交叉信息
-- **综合**：把事实与调研结果综合成一份研判
-- **策略**：给出可执行的跟进策略建议
-- **批判**：对前面所有结论做一次批判性审视——**专门挑自己毛病的那一段**
-
-你拿到的不只是答案，还有答案被审视过的过程。
-
----
-
-## 使用方式
-
-1. 打开 **[cardio.sy-realm.ltd](https://cardio.sy-realm.ltd)**，注册并登录（邮箱验证闭环）
-2. 在模型提供方设置中填入你自己的 API Key（**BYOK**——模型成本自控，平台不代垫）
-3. 新建一次分析：输入目标企业或机会描述，提交五段管线
-4. 每段耗时分钟级，任务持久化执行——中途离开、刷新页面，回来结果还在
-5. 在历史记录中回看每一次分析的完整五段输出
-
-> 免费额度：每用户每日 3 次分析；额度用尽时自动使用本地兜底模式，不中断使用。
-
-### 本地开发（可选）
+Python 3.12、Node 22、pnpm 9：
 
 ```bash
-# 后端（FastAPI + Temporal worker）
-python -m venv venv && source venv/bin/activate
-pip install -e .
-cp .env.example .env   # 编辑 .env 填入 LLM API key
-
-# 前端（cardio-web/，React + Vite）
-cd cardio-web && pnpm install && pnpm dev
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+cp .env.example .env
+# 配置 CARDIO_JWT_SECRET 和所需模型凭据；不要将密钥提交到仓库
+bash scripts/preflight.sh
+python run.py
 ```
 
----
+前端：
 
-## 品牌与产品能力
+```bash
+cd cardio-web
+pnpm install --frozen-lockfile
+pnpm dev
+```
 
-| 能力 | 说明 |
-|---|---|
-| **五段分析管线** | extraction → research → synthesis → strategy → critique，每段独立产出、可分别回看 |
-| **批判性审视段** | 独有的 critique 段：对结论做对立面审查，输出"最可能错在哪"，而不是只给乐观答案 |
-| **BYOK 模式** | 模型 Key 由用户自备，成本自控；无 Key 时按本地兜底模式运行 |
-| **配额与兜底** | 每用户每日 3 次，超限本地兜底——独立开发者的成本控制范式 |
-| **长任务不断线** | 分析任务跑在持久化执行引擎上，自动重试、断点恢复，刷新不丢结果 |
-| · 邮箱验证闭环 | 注册-验证-登录全流程，QQ SMTP 统一发信 |
+### Temporal Worker（可选，当前不由 HTTP API 派发）
 
----
+```bash
+export TEMPORAL_ADDRESS=127.0.0.1:7233
+export TEMPORAL_NAMESPACE=cardio
+export TEMPORAL_TASK_QUEUE=cardio-task-queue
+python -m cardio.temporal.worker
+```
 
-## 技术与特色
+需要事先提供可访问的 Temporal 服务与对应 namespace。Worker 能独立启动，不等于 HTTP API 已使用它；未来接入需要任务提交、结果查询和 BYOK 凭据引用设计，不能将明文 API Key 放进工作流历史。
 
-| 层 | 选型 |
-|---|---|
-| 前端 | React 19 · Vite 8 · Tailwind CSS 4 · React Router 7 |
-| 后端 | FastAPI · Pydantic v2 · SQLite |
-| 任务编排 | 持久化工作流引擎（五段顺序编排、自动重试、状态可查询） |
-| LLM 接入 | 统一网关 + 用户级配额；openclaw_core 共享库 |
+## 验证
 
-**工程特色**：
+```bash
+bash scripts/preflight.sh
+```
 
-- **前端零依赖路由框架之外的状态管理**——单页工具，views/ 目录自管视图，不引不需要的能力
-- **LLM 调用统一走网关**：超时、重试、配额一处收敛，产品代码不各自造轮子
-- **构建链保鲜**：Vite 8（Rolldown 内核）+ plugin-react 6，冷启动与 HMR 为当前代事实标准
+门禁包含语法编译、pytest 离线契约、FastAPI 核心路由与鉴权冒烟、pnpm 锁文件构建。**不依赖外部 LLM、邮箱服务或 Temporal Server 才能通过。**
 
----
+相关工程说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
-© Cardio · MiLab-Bit
+## 运营与安全
+
+- 任何部署、数据库迁移、用户凭据轮换均由授权运营人员执行；AI 不自动部署。
+- BYOK 数据位于 `model_providers.api_key_enc`；不得将 Fernet 密钥、数据库备份、真实 API Key 写入仓库或 CI。
+- 未经独立线上验证的可用性、持续运行时间、模型效果不在本 README 中承诺。

@@ -21,7 +21,7 @@ done
 printf '仓库：%s\npython：%s\n' "$REPO_ROOT" "${PY:-未找到}"
 
 # ---------------- 1/3 语法与导入 ----------------
-sec "1/3 语法编译（compileall）"
+sec "1/4 语法编译（compileall）"
 if [ -n "$PY" ]; then
   if "$PY" -m compileall -q cardio run.py mock_llm.py >/dev/null 2>&1; then
     ok "cardio/ 与入口脚本语法通过"
@@ -33,8 +33,18 @@ else
   skp "找不到 python 解释器"
 fi
 
-# ---------------- 2/3 离线接口冒烟 ----------------
-sec "2/3 离线接口冒烟"
+# ---------------- 2/4 离线契约回归 ----------------
+sec "2/4 离线测试（pytest）"
+if [ -z "$PY" ]; then
+  bad "找不到 Python 解释器，无法执行测试"
+elif "$PY" -m pytest tests/ -q; then
+  ok "pytest 核心契约通过"
+else
+  bad "pytest 核心契约失败"
+fi
+
+# ---------------- 3/4 离线接口冒烟 ----------------
+sec "3/4 离线接口冒烟"
 if [ -z "$PY" ]; then
   skp "找不到 python 解释器"
 elif [ ! -f tests/smoke.py ]; then
@@ -44,18 +54,20 @@ else
   printf '  命令：%s tests/smoke.py\n' "$PY"
 fi
 
-# ---------------- 3/3 前端构建 ----------------
-sec "3/3 前端构建（cardio-web）"
+# ---------------- 4/4 前端构建 ----------------
+sec "4/4 前端构建（cardio-web）"
 if [ ! -f cardio-web/package.json ]; then
   skp "没有 cardio-web/package.json"
-elif ! command -v npm >/dev/null 2>&1; then
-  skp "环境里没有 npm"
+elif ! command -v pnpm >/dev/null 2>&1; then
+  bad "缺少 pnpm（此仓库以 cardio-web/pnpm-lock.yaml 为唯一构建锁文件）"
 else
   (
     set -e
     cd cardio-web
-    if [ -f package-lock.json ]; then npm ci --no-audit --no-fund >/dev/null; else npm install --no-audit --no-fund >/dev/null; fi
-    npm run build >/dev/null
+    # package-lock.json was generated from an older dependency graph.
+    # pnpm-lock.yaml is the maintained package graph for Vite 8 / React 19.
+    pnpm install --frozen-lockfile
+    pnpm run build
   ) && ok "前端构建通过（cardio-web）" || bad "前端构建失败（cardio-web）"
 fi
 

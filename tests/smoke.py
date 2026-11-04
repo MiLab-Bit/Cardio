@@ -60,6 +60,16 @@ def main() -> int:
             assert r.status_code == 200, f"status={r.status_code}"
             paths = r.json().get("paths", {})
             assert len(paths) >= 8, f"只有 {len(paths)} 条路径"
+            required = {
+                "/api/chat": "post",
+                "/api/analyze": "post",
+                "/api/card/scan": "post",
+                "/api/contacts": "get",
+                "/api/contacts/{cid}": "put",
+                "/api/history": "get",
+            }
+            for route, method in required.items():
+                assert method in paths.get(route, {}), f"核心业务路由未注册：{method.upper()} {route}"
             return f"{len(paths)} 条路径可生成 schema"
 
     def _auth_gate():
@@ -82,6 +92,23 @@ def main() -> int:
     check("GET /api/healthz", _healthz)
     check("GET /openapi.json", _openapi)
     check("鉴权闸门", _auth_gate)
+    def _protected_routes():
+        with TestClient(app) as client:
+            endpoints = [
+                ("post", "/api/chat", {"message": "hello"}),
+                ("post", "/api/analyze", {"text": "test target"}),
+                ("post", "/api/card/scan", {"image": "test"}),
+                ("get", "/api/contacts", None),
+                ("get", "/api/history", None),
+            ]
+            for method, path, data in endpoints:
+                response = getattr(client, method)(path, json=data) if data else getattr(client, method)(path)
+                assert response.status_code == 401, (
+                    f"{method.upper()} {path} should be registered and protected, got {response.status_code}"
+                )
+        return "五个核心业务接口已注册且拒绝匿名访问"
+
+    check("业务路由注册与身份保护", _protected_routes)
     check("未知路径", _unknown)
 
     print("冒烟明细：")

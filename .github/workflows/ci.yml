@@ -26,15 +26,21 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: cardio-web/pnpm-lock.yaml
 
       - name: 安装 Python 依赖
         run: |
           set -e
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
 
       - name: 跑门禁（唯一入口）
         run: bash scripts/preflight.sh
@@ -61,11 +67,12 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
+          cache-dependency-path: cardio-web/pnpm-lock.yaml
       - name: Install frontend deps
         working-directory: cardio-web
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
       - name: JS/TS lint (eslint)
         working-directory: cardio-web
         run: pnpm exec eslint . || true

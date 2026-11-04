@@ -1,16 +1,18 @@
-"""Cardio LLM 客户端 — 委托 openclaw_core.gateway.Gateway。
+"""Cardio LLM 客户端 — 使用仓库内可独立验证的 Gateway。
 
-配额门控 / 并发闸门 / 指数退避 / 响应缓存 / JSON 解析全部下沉到共享库，
+配额门控 / 并发闸门 / 指数退避 / 响应缓存由 cardio.gateway 提供；
 本文件只保留产品级对外符号（chat / vision_chat / test_provider /
 set_scope / client_for / extract_json / LLMQuotaExceeded），调用点零改动。
 """
 from __future__ import annotations
 
+import json
+import re
 from contextvars import ContextVar
 from typing import AsyncIterator
 
 from openai import AsyncOpenAI
-from openclaw_core.gateway import Gateway, QuotaExceeded
+from .gateway import Gateway, QuotaExceeded
 
 from . import config
 
@@ -38,7 +40,7 @@ _gateway = Gateway(
 
 
 def client_for(provider: dict | None = None) -> AsyncOpenAI:
-    """兼容旧调用：返回平台或 BYOK 的 AsyncOpenAI 客户端。"""
+    """兼容旧调用：返回低级客户端；业务调用应使用 chat() 以受配额控制。"""
     if provider and provider.get("api_key"):
         return AsyncOpenAI(
             base_url=provider.get("base_url") or config.LLM_BASE_URL,
@@ -61,7 +63,7 @@ async def chat(
     """非流式返回完整文本；流式返回 token 异步迭代器。provider 携带时走 BYOK。"""
     return await _gateway.chat(
         messages,
-        model=model or config.LLM_MODEL,
+        model=model or (provider or {}).get("model") or config.LLM_MODEL,
         temperature=temperature if temperature is not None else config.LLM_TEMPERATURE,
         max_tokens=max_tokens or config.LLM_MAX_TOKENS,
         stream=stream,
@@ -88,7 +90,7 @@ async def vision_chat(
     content.append({"type": "text", "text": text_prompt})
     return await _gateway.chat(
         [{"role": "user", "content": content}],
-        model=model or config.VISION_MODEL,
+        model=model or (provider or {}).get("model") or config.VISION_MODEL,
         temperature=temperature,
         max_tokens=max_tokens,
         stream=False,
@@ -100,3 +102,31 @@ async def vision_chat(
 async def test_provider(provider: dict) -> dict:
     """验证用户自带供应商配置是否可用。"""
     return await _gateway.test_provider(provider)
+
+
+_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+_FENCE = re.escape(chr(96) * 3)
+_FENCE_RE = re.compile(rf"{_FENCE}(?:json)?\s*(.*?){_FENCE}", re.DOTALL)
+
+
+def extract_json(text: str) -> dict:
+    """Restore the JSON parser required by pipeline._stage."""
+    value = (text or "").strip()
+    fenced = _FENCE_RE.search(value)
+    if fenced:
+        value = fenced.group(1).strip()
+    try:
+        data = json.loads(value)
+        if isinstance(data, dict):
+            return data
+    except (ValueError, TypeError):
+        pass
+    match = _JSON_RE.search(value)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            if isinstance(data, dict):
+                return data
+        except (ValueError, TypeError):
+            pass
+    return {"raw": text}

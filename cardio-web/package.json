@@ -1,5 +1,6 @@
 {
   "name": "cardio-web",
+  "packageManager": "pnpm@9.15.0",
   "private": true,
   "version": "0.2.0",
   "type": "module",

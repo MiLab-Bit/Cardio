@@ -132,7 +132,7 @@ async def _stage(stage: str, user_prompt: str, provider: dict | None = None) -> 
     text = await llm.chat(
         [{"role": "system", "content": _SYSTEMS[stage]},
          {"role": "user", "content": user_prompt}],
-        model=llm.config.LLM_MODEL,
+        model=(provider or {}).get("model") or llm.config.LLM_MODEL,
         temperature=STAGE_TEMPERATURES.get(stage, 0.3),
         provider=provider,
     )
