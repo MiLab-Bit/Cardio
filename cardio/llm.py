@@ -63,7 +63,7 @@ async def chat(
     """非流式返回完整文本；流式返回 token 异步迭代器。provider 携带时走 BYOK。"""
     return await _gateway.chat(
         messages,
-        model=model or config.LLM_MODEL,
+        model=model or (provider or {}).get("model") or config.LLM_MODEL,
         temperature=temperature if temperature is not None else config.LLM_TEMPERATURE,
         max_tokens=max_tokens or config.LLM_MAX_TOKENS,
         stream=stream,
@@ -90,7 +90,7 @@ async def vision_chat(
     content.append({"type": "text", "text": text_prompt})
     return await _gateway.chat(
         [{"role": "user", "content": content}],
-        model=model or config.VISION_MODEL,
+        model=model or (provider or {}).get("model") or config.VISION_MODEL,
         temperature=temperature,
         max_tokens=max_tokens,
         stream=False,
