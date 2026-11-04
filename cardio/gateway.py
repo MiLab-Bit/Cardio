@@ -7,6 +7,7 @@ import time.  It is not a replacement for the OpenClaw system/service.
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 import hashlib
 import json
 import logging
@@ -49,7 +50,7 @@ class QuotaGate:
         return datetime.now(timezone.utc).date().isoformat()
 
     def used(self, scope: str) -> int:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             row = conn.execute(
                 "SELECT used FROM quota_usage WHERE day=? AND scope=?",
                 (self._today(), scope),
@@ -62,7 +63,7 @@ class QuotaGate:
         if self.limit < 0:
             raise QuotaExceeded("invalid daily quota configuration")
         try:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 # SQLite serializes all writers; two simultaneous calls cannot
                 # both pass the final remaining unit.
                 conn.execute("BEGIN IMMEDIATE")
@@ -104,7 +105,7 @@ class _SqliteCache:
 
     def get(self, key: str) -> str | None:
         try:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 row = conn.execute(
                     "SELECT content,created_at FROM llm_cache WHERE cache_key=?",
                     (key,),
@@ -122,7 +123,7 @@ class _SqliteCache:
 
     def put(self, key: str, content: str) -> None:
         try:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 conn.execute(
                     "INSERT INTO llm_cache(cache_key,content,created_at,hits) VALUES(?,?,?,1) "
                     "ON CONFLICT(cache_key) DO UPDATE SET "
