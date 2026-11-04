@@ -62,7 +62,7 @@ def test_decode_token_tampered_signature_returns_none():
 
     tok = auth.issue_token("u1", "a@b.com", _JWT_SECRET)
     h, p, s = tok.split(".")
-    bad_sig = ("A" if s[-1] != "A" else "B") + s[1:]
+    bad_sig = ("A" if s[0] != "A" else "B") + s[1:]
     assert auth.decode_token(f"{h}.{p}.{bad_sig}", _JWT_SECRET) is None
 
 

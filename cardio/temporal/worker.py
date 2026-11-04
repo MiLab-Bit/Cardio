@@ -1,7 +1,7 @@
 """Standalone Cardio Temporal worker (no OpenClaw runtime dependency).
 
-The existing FastAPI /api/analyze endpoint currently runs pipeline.run_pipeline
-in process. Running this worker does not silently change that execution path.
+The FastAPI /api/analyze endpoint dispatches to this worker via Temporal.
+No plaintext BYOK credential enters Workflow or Activity arguments.
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from temporalio.worker import Worker
 from cardio.temporal.activities import (
     critique_activity,
     extraction_activity,
+    persist_analysis_activity,
     research_activity,
     strategy_activity,
     synthesis_activity,
@@ -40,6 +41,7 @@ async def _run() -> None:
             synthesis_activity,
             strategy_activity,
             critique_activity,
+            persist_analysis_activity,
         ],
     )
     await worker.run()

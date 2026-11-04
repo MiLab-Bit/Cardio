@@ -29,7 +29,7 @@ class CardioAnalyzeWorkflow:
     @workflow.run
     async def run(self, inp: AnalyzeInput) -> dict[str, Any]:
         self._emit("init", 2.0, "接收客户信息")
-        shared = {"raw_text": inp.raw_text, "provider": inp.provider, "owner": inp.owner}
+        shared = {"raw_text": inp.raw_text, "provider_id": inp.provider_id, "owner": inp.owner}
 
         # 1) extraction
         self._emit("extraction", 20.0, "信息提取")
@@ -62,13 +62,26 @@ class CardioAnalyzeWorkflow:
         # 5) critique
         self._emit("critique", 95.0, "风险审核")
         self.results["critique"] = await workflow.execute_activity(
-            "critique", {**self.results, "provider": inp.provider, "owner": inp.owner},
+            "critique", {**self.results, "provider_id": inp.provider_id, "owner": inp.owner},
             start_to_close_timeout=_ACT_TIMEOUT, retry_policy=_ACT_RETRY,
         )
 
+        # Persist independently of HTTP SSE. Retry idempotency is the workflow ID.
+        self._emit("persist", 98.0, "保存商务分析")
+        self.final_result = await workflow.execute_activity(
+            "persist_analysis",
+            {
+                "owner": inp.owner,
+                "contact_id": inp.contact_id,
+                "input_text": inp.raw_text,
+                "results": self.results,
+                "analysis_id": workflow.info().workflow_id,
+            },
+            start_to_close_timeout=_ACT_TIMEOUT, retry_policy=_ACT_RETRY,
+        )
         self.status = "completed"
         self._emit("done", 100.0, "分析完成")
-        return self._snapshot()
+        return {**self._snapshot(), "result": self.final_result}
 
     @workflow.query
     def get_progress(self) -> list[dict[str, Any]]:

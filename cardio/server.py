@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
+import uuid
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -26,7 +28,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from . import auth as auth_lib
 from . import config, email_utils, llm, store
 from .cardscan import card_to_text, extract_card
-from .pipeline import STAGE_META, run_pipeline
+from .pipeline import STAGE_META
 
 app = FastAPI(title="Cardio API", version="0.3.0")
 
@@ -368,104 +370,148 @@ async def chat(request: Request):
     )
 
 
-# ── 五段式分析（SSE，支持名片图片，自动落库名片）──
+# ── 五段式分析：Temporal 是唯一分析执行路径 ──
 @api.post("/api/analyze")
 async def analyze(request: Request):
     body = await request.json()
     text: str = (body.get("text") or "").strip()
     image: str | None = body.get("image")
-    image_format: str = (body.get("image_format") or "jpeg")
+    image_format: str = body.get("image_format") or "jpeg"
     contact_id: str | None = body.get("contact_id")
     if not text and not image:
         raise HTTPException(status_code=400, detail={"error": "text or image required"})
 
     owner = resolve_owner(request)
-    # 按槽位选 provider：文本分析走 text 槽，名片图片识别走 multimodal 槽；缺失则回退平台默认
-    text_provider = store.get_active_provider(owner, "text")
-    mm_provider = store.get_active_provider(owner, "multimodal")
+    # The API reads only the provider reference for the text workflow.
+    # No decrypted BYOK key may be passed to a Temporal input or Activity.
+    provider_id = store.get_active_provider_id(owner, "text")
+    mm_provider = store.get_active_provider(owner, "multimodal") if image else None
+
+    from temporalio.client import Client
+
+    from .temporal.common import AnalyzeInput
+    from .temporal.workflows.analyze import CardioAnalyzeWorkflow
+
+    # Fail closed if Temporal is unavailable; NEVER fall back to in-process analysis.
+    try:
+        client = await Client.connect(
+            os.getenv("TEMPORAL_ADDRESS", "127.0.0.1:7233"),
+            namespace=os.getenv("TEMPORAL_NAMESPACE", "cardio"),
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "TEMPORAL_UNAVAILABLE", "message": "分析服务暂时不可用"},
+        ) from None
+
+    def sse(payload: dict) -> str:
+        return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
     async def event_stream():
-        queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+        nonlocal contact_id
+        yield sse({"type": "pipeline_start"})
+        llm.set_scope(owner)
+        effective_text = text
 
-        async def on_progress(stage: str, data: dict) -> None:
+        # Card image parsing occurs before Workflow submission. Its decrypted
+        # multimodal key remains local to this API call and is never serialized.
+        if image:
+            yield sse({"type": "vision_start"})
             try:
-                await queue.put((stage, data))
-            except asyncio.QueueFull:
-                pass
+                card = await extract_card(image, image_format, provider=mm_provider)
+                yield sse({"type": "vision_done", "card": card})
+                contact = store.save_contact(owner, {
+                    "name": card.get("name"),
+                    "title": card.get("title"),
+                    "company": card.get("company"),
+                    "phone": card.get("phone") or card.get("mobile"),
+                    "email": card.get("email"),
+                    "tags": card.get("tags"),
+                    "notes": card.get("raw_text", ""),
+                })
+                contact_id = contact["id"]
+                yield sse({"type": "contact_saved", "contact": contact})
+                card_text = card_to_text(card)
+                if card_text:
+                    effective_text = (card_text + "\n\n" + text).strip() if text else card_text
+            except Exception:
+                # Error messages from third-party clients may contain headers.
+                yield sse({"type": "vision_error", "error": "名片识别失败，请检查输入或模型配置"})
+                if not text:
+                    return
 
-        async def run():
-            nonlocal contact_id
-            llm.set_scope(owner)
-            try:
-                effective_text = text
-                if image:
-                    await queue.put(("vision_start", {}))
-                    try:
-                        card = await extract_card(image, image_format, provider=mm_provider)
-                        await queue.put(("vision_done", {"card": card}))
-                        contact = store.save_contact(owner, {
-                            "name": card.get("name"),
-                            "title": card.get("title"),
-                            "company": card.get("company"),
-                            "phone": card.get("phone") or card.get("mobile"),
-                            "email": card.get("email"),
-                            "tags": card.get("tags"),
-                            "notes": card.get("raw_text", ""),
-                        })
-                        contact_id = contact["id"]
-                        await queue.put(("contact_saved", {"contact": contact}))
-                        card_text = card_to_text(card)
-                        if card_text:
-                            effective_text = (card_text + "\n\n" + text).strip() if text else card_text
-                    except Exception as exc:  # noqa: BLE001
-                        await queue.put(("vision_error", {"error": str(exc)}))
-                result = await run_pipeline(effective_text, on_progress=on_progress, provider=text_provider)
-                store.save_analysis(owner, effective_text, result, contact_id=contact_id)
-            except llm.LLMQuotaExceeded:
-                await queue.put(("error", {"error": "今日 AI 额度已用完（每用户每日 3 次），明日重置；也可配置自己的模型 Key"}))
-            except Exception as exc:  # noqa: BLE001
-                await queue.put(("error", {"error": str(exc)}))
-            finally:
-                await queue.put(None)
+        if not effective_text:
+            yield sse({"type": "error", "error": "没有可分析的有效文本"})
+            return
 
-        task = asyncio.create_task(run())
+        workflow_id = "cardio-analyze-" + uuid.uuid4().hex
+        try:
+            handle = await client.start_workflow(
+                CardioAnalyzeWorkflow.run,
+                AnalyzeInput(
+                    raw_text=effective_text,
+                    raw_type="card_image" if image else "text",
+                    provider_id=provider_id,
+                    owner=owner,
+                    contact_id=contact_id,
+                ),
+                id=workflow_id,
+                task_queue=os.getenv("TEMPORAL_TASK_QUEUE", "cardio-task-queue"),
+            )
+            yield sse({"type": "workflow_started", "workflow_id": workflow_id})
 
-        while True:
-            item = await queue.get()
-            if item is None:
-                break
-            stage, data = item
-            if stage == "pipeline_start":
-                payload = {"type": "pipeline_start"}
-            elif stage == "vision_start":
-                payload = {"type": "vision_start"}
-            elif stage == "vision_done":
-                payload = {"type": "vision_done", "card": data.get("card", {})}
-            elif stage == "contact_saved":
-                payload = {"type": "contact_saved", "contact": data.get("contact", {})}
-            elif stage == "vision_error":
-                payload = {"type": "vision_error", "error": data.get("error", "")}
-            elif stage == "stage_start":
-                meta = STAGE_META.get(data["stage"], {})
-                payload = {"type": "stage_start", "stage": data["stage"],
-                           "label": meta.get("label", data["stage"]),
-                           "agent": meta.get("agent", "")}
-            elif stage == "stage_done":
-                payload = {"type": "stage_done", "stage": data["stage"], "report": data["report"]}
-            elif stage == "complete":
-                payload = {"type": "complete", "result": data["result"]}
-            elif stage == "error":
-                payload = {"type": "error", "error": data.get("error")}
-            else:
-                payload = {"type": stage, **data}
-            yield "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+            result_task = asyncio.create_task(handle.result())
+            started: set[str] = set()
+            completed: set[str] = set()
 
-        await task
+            async def report_snapshot(snapshot: dict):
+                # Returns event objects; no Activity argument or secret is exposed.
+                events = []
+                for point in snapshot.get("progress", []):
+                    stage = point.get("stage")
+                    if stage in STAGE_META and stage not in started:
+                        started.add(stage)
+                        events.append({"type": "stage_start", "stage": stage,
+                                       "label": STAGE_META[stage]["label"],
+                                       "agent": STAGE_META[stage]["agent"]})
+                for stage, details in snapshot.get("results", {}).items():
+                    if stage in STAGE_META and stage not in completed:
+                        completed.add(stage)
+                        report = {"agent_name": stage, "label": STAGE_META[stage]["label"],
+                                  "summary": details.get("summary", ""),
+                                  "details": details,
+                                  "confidence": details.get("confidence", 0.0)}
+                        events.append({"type": "stage_done", "stage": stage, "report": report})
+                return events
+
+            # Poll Temporal queries, not an API-process analysis queue. Analysis
+            # and its database persistence continue if this SSE client disconnects.
+            while not result_task.done():
+                try:
+                    snapshot = await handle.query(CardioAnalyzeWorkflow.get_snapshot)
+                    for event in await report_snapshot(snapshot):
+                        yield sse(event)
+                except Exception:
+                    # Temporary query unavailability does not stop durable execution.
+                    pass
+                await asyncio.sleep(0.6)
+
+            snapshot = await result_task
+            for event in await report_snapshot(snapshot):
+                yield sse(event)
+            yield sse({"type": "complete", "result": snapshot["result"],
+                       "workflow_id": workflow_id})
+        except Exception:
+            # Do not surface upstream exceptions containing BYOK credentials.
+            yield sse({"type": "error",
+                       "error": "Temporal 分析未完成，请通过服务日志与工作流 ID 排查",
+                       "workflow_id": workflow_id})
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                 "Connection": "keep-alive"},
     )
 
 
