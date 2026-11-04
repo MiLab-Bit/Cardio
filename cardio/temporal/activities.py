@@ -17,26 +17,20 @@ def _heartbeat(*d: str) -> None:
 async def _llm_call(system: str, user: str, provider: dict | None = None, owner: str = "") -> dict:
     """共用 LLM 调用。"""
     from cardio import config, llm
+    # Temporal activities must use the same quota/cache/BYOK gateway as the API,
+    # not client_for() which exposes a raw, unmetered provider client.
     llm.set_scope(owner or "anon")
-    client = llm.client_for(provider)
-    resp = await client.chat.completions.create(
-        model=config.LLM_MODEL,
-        messages=[
+    text = await llm.chat(
+        [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
+        model=config.LLM_MODEL,
         temperature=config.LLM_TEMPERATURE,
         max_tokens=config.LLM_MAX_TOKENS,
+        provider=provider,
     )
-    text = resp.choices[0].message.content or "{}"
-    # 提取 JSON
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[-1].rsplit("```", 1)[0]
-    try:
-        return json.loads(text)
-    except Exception:
-        return {"raw": text}
+    return llm.extract_json(text)
 
 
 @activity.defn(name="extraction")
