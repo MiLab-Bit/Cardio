@@ -369,6 +369,41 @@ def get_active_provider(owner_id: str, slot: str = "text") -> dict[str, Any] | N
     return get_model_provider(r["id"], owner_id)
 
 
+def get_active_provider_id(owner_id: str, slot: str = "text") -> str | None:
+    """Return a stable owner-scoped provider ID without decrypting the BYOK key.
+
+    The ID (not a credential dictionary) is safe to persist in Temporal history.
+    """
+    with _connect() as c:
+        row = c.execute(
+            "SELECT id FROM model_providers "
+            "WHERE owner_id=? AND slot=? AND status='active' "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (owner_id, slot),
+        ).fetchone()
+    return str(row["id"]) if row else None
+
+
+def resolve_workflow_provider(provider_id: str, owner_id: str) -> dict[str, Any]:
+    """Resolve an active text BYOK provider *inside* the trusted Activity worker.
+
+    A revoked, deleted, cross-owner or wrong-slot reference must fail closed;
+    it must never silently downgrade to a platform-billed model.
+    """
+    with _connect() as c:
+        row = c.execute(
+            "SELECT id FROM model_providers "
+            "WHERE id=? AND owner_id=? AND slot='text' AND status='active'",
+            (provider_id, owner_id),
+        ).fetchone()
+    if not row:
+        raise LookupError("requested text provider is unavailable")
+    provider = get_model_provider(provider_id, owner_id)
+    if provider is None or not provider.get("api_key"):
+        raise LookupError("requested text provider is unavailable")
+    return provider
+
+
 def get_active_model_provider(owner_id: str) -> dict[str, Any] | None:
     """兼容别名：默认取 text 槽位 active 配置（供既有调用方使用，无需改动）。"""
     return get_active_provider(owner_id, "text")
@@ -480,11 +515,13 @@ def save_analysis(
     input_text: str,
     result: dict[str, Any],
     contact_id: str | None = None,
+    analysis_id: str | None = None,
 ) -> dict[str, Any]:
-    aid = uuid.uuid4().hex[:12]
+    # Temporal may retry a persistence Activity: its workflow ID is an idempotency key.
+    aid = analysis_id or uuid.uuid4().hex[:12]
     with _connect() as c:
         c.execute(
-            "INSERT INTO analyses (id,input_text,result_json,created_at,owner,contact_id) "
+            "INSERT OR IGNORE INTO analyses (id,input_text,result_json,created_at,owner,contact_id) "
             "VALUES (?,?,?,?,?,?)",
             (aid, input_text, json.dumps(result, ensure_ascii=False), _now(), owner, contact_id),
         )
