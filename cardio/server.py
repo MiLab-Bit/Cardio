@@ -388,6 +388,7 @@ async def analyze(request: Request):
     mm_provider = store.get_active_provider(owner, "multimodal") if image else None
 
     from temporalio.client import Client
+
     from .temporal.common import AnalyzeInput
     from .temporal.workflows.analyze import CardioAnalyzeWorkflow
 
