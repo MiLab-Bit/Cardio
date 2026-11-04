@@ -7,13 +7,13 @@ import time.  It is not a replacement for the OpenClaw system/service.
 from __future__ import annotations
 
 import asyncio
-from contextlib import closing
 import hashlib
 import json
 import logging
 import os
 import sqlite3
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
