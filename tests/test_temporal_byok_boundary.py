@@ -102,8 +102,9 @@ def test_idempotent_temporal_persistence(monkeypatch, tmp_path):
 
 
 def test_http_analysis_submits_only_provider_id_to_temporal(monkeypatch):
-    from cardio import server
     from temporalio.client import Client
+
+    from cardio import server
 
     submitted = []
     snapshot = {"status": "completed", "progress": [], "results": {},
