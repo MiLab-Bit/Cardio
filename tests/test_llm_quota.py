@@ -117,3 +117,30 @@ def test_quota_env_unlimited(env, monkeypatch, tmp_path):
     for i in range(5):
         assert _chat(content=f"m{i}") == "fake-llm-response"
     assert len(fc.calls) == 5
+
+
+
+def test_byok_uses_selected_model_instead_of_platform_default(env):
+    fc, _ = env
+    llm.set_scope("private-user")
+    provider = {
+        "api_key": "user-owned-key",
+        "base_url": "https://byok.example/v1",
+        "model": "chosen-research-model",
+    }
+    assert _chat(content="private prompt", provider=provider) == "fake-llm-response"
+    assert fc.calls[-1]["model"] == "chosen-research-model"
+
+
+def test_byok_vision_uses_selected_multimodal_model(env):
+    fc, _ = env
+    llm.set_scope("private-user")
+    result = asyncio.run(
+        llm.vision_chat(
+            "extract text", image_b64="not-real-image",
+            provider={"api_key": "user-vision-key", "model": "chosen-vision-model"},
+        )
+    )
+    assert result == "fake-llm-response"
+    assert fc.calls[-1]["model"] == "chosen-vision-model"
+    assert fc.calls[-1]["messages"][0]["content"][0]["type"] == "image_url"
