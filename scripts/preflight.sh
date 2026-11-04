@@ -21,7 +21,7 @@ done
 printf '仓库：%s\npython：%s\n' "$REPO_ROOT" "${PY:-未找到}"
 
 # ---------------- 1/3 语法与导入 ----------------
-sec "1/3 语法编译（compileall）"
+sec "1/4 语法编译（compileall）"
 if [ -n "$PY" ]; then
   if "$PY" -m compileall -q cardio run.py mock_llm.py >/dev/null 2>&1; then
     ok "cardio/ 与入口脚本语法通过"
@@ -33,8 +33,18 @@ else
   skp "找不到 python 解释器"
 fi
 
-# ---------------- 2/3 离线接口冒烟 ----------------
-sec "2/3 离线接口冒烟"
+# ---------------- 2/4 离线契约回归 ----------------
+sec "2/4 离线测试（pytest）"
+if [ -z "$PY" ]; then
+  bad "找不到 Python 解释器，无法执行测试"
+elif "$PY" -m pytest tests/ -q; then
+  ok "pytest 核心契约通过"
+else
+  bad "pytest 核心契约失败"
+fi
+
+# ---------------- 3/4 离线接口冒烟 ----------------
+sec "3/4 离线接口冒烟"
 if [ -z "$PY" ]; then
   skp "找不到 python 解释器"
 elif [ ! -f tests/smoke.py ]; then
@@ -44,8 +54,8 @@ else
   printf '  命令：%s tests/smoke.py\n' "$PY"
 fi
 
-# ---------------- 3/3 前端构建 ----------------
-sec "3/3 前端构建（cardio-web）"
+# ---------------- 4/4 前端构建 ----------------
+sec "4/4 前端构建（cardio-web）"
 if [ ! -f cardio-web/package.json ]; then
   skp "没有 cardio-web/package.json"
 elif ! command -v pnpm >/dev/null 2>&1; then
