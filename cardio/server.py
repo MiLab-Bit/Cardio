@@ -87,8 +87,6 @@ def resolve_owner(request: Request) -> str:
 
 api = APIRouter(dependencies=[Depends(get_current_user)])
 
-app.include_router(api)
-
 
 SHANGSHU_SYSTEM = (
     "你是「商枢」，Cardio 数字商册中勇敢而热情的商务助手，化用哥萨克般敢闯敢拼的精神。"
@@ -538,6 +536,10 @@ async def delete_contact_route(cid: str, request: Request):
 async def history(request: Request, contact_id: str | None = None):
     owner = resolve_owner(request)
     return {"status": "ok", "records": store.list_analyses(owner, contact_id=contact_id)}
+
+
+# Mount AFTER every @api route is registered. FastAPI copies routes at include time.
+app.include_router(api)
 
 
 @app.exception_handler(HTTPException)
