@@ -404,7 +404,7 @@ async def analyze(request: Request):
         ) from None
 
     def sse(payload: dict) -> str:
-        return "data: " + json.dumps(payload, ensure_ascii=False) + "\\n\\n"
+        return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
     async def event_stream():
         nonlocal contact_id
@@ -432,7 +432,7 @@ async def analyze(request: Request):
                 yield sse({"type": "contact_saved", "contact": contact})
                 card_text = card_to_text(card)
                 if card_text:
-                    effective_text = (card_text + "\\n\\n" + text).strip() if text else card_text
+                    effective_text = (card_text + "\n\n" + text).strip() if text else card_text
             except Exception:
                 # Error messages from third-party clients may contain headers.
                 yield sse({"type": "vision_error", "error": "名片识别失败，请检查输入或模型配置"})
