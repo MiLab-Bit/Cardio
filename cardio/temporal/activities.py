@@ -25,7 +25,7 @@ async def _llm_call(system: str, user: str, provider: dict | None = None, owner:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        model=config.LLM_MODEL,
+        model=(provider or {}).get("model") or config.LLM_MODEL,
         temperature=config.LLM_TEMPERATURE,
         max_tokens=config.LLM_MAX_TOKENS,
         provider=provider,
