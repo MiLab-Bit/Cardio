@@ -48,14 +48,16 @@ fi
 sec "3/3 前端构建（cardio-web）"
 if [ ! -f cardio-web/package.json ]; then
   skp "没有 cardio-web/package.json"
-elif ! command -v npm >/dev/null 2>&1; then
-  skp "环境里没有 npm"
+elif ! command -v pnpm >/dev/null 2>&1; then
+  bad "缺少 pnpm（此仓库以 cardio-web/pnpm-lock.yaml 为唯一构建锁文件）"
 else
   (
     set -e
     cd cardio-web
-    if [ -f package-lock.json ]; then npm ci --no-audit --no-fund >/dev/null; else npm install --no-audit --no-fund >/dev/null; fi
-    npm run build >/dev/null
+    # package-lock.json was generated from an older dependency graph.
+    # pnpm-lock.yaml is the maintained package graph for Vite 8 / React 19.
+    pnpm install --frozen-lockfile
+    pnpm run build
   ) && ok "前端构建通过（cardio-web）" || bad "前端构建失败（cardio-web）"
 fi
 
