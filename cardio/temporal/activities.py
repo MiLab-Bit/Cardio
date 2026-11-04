@@ -24,6 +24,7 @@ async def _llm_call(
     Model failures are redacted before Temporal persists activity exceptions.
     """
     from temporalio.exceptions import ApplicationError
+
     from cardio import config, llm, store
     from cardio.pipeline import STAGE_TEMPERATURES
 
@@ -120,6 +121,7 @@ async def persist_analysis_activity(inp: dict[str, Any]) -> dict[str, Any]:
     credential or encrypted token ever appears in workflow/activity arguments.
     """
     from datetime import datetime, timezone
+
     from cardio import store
     from cardio.pipeline import STAGE_META, STAGE_ORDER
 
