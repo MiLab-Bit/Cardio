@@ -114,3 +114,32 @@ def test_invalid_preexisting_key_fails_closed(tmp_path, monkeypatch):
     monkeypatch.delenv("CARDIO_REQUIRE_ENC_KEY", raising=False)
     with pytest.raises(ValueError):
         Fernet(crypto._load_key())
+
+
+def test_missing_key_with_existing_credentials_fails_closed(tmp_path, monkeypatch):
+    db = tmp_path / "existing.sqlite"
+    old_key = Fernet.generate_key()
+    make_db(db, [Fernet(old_key).encrypt(b"synthetic-token").decode()])
+    key_path = tmp_path / ".enc_key"
+    monkeypatch.setattr(crypto, "_KEY_PATH", key_path)
+    monkeypatch.setattr(crypto.config, "DB_PATH", str(db))
+    monkeypatch.delenv("CARDIO_ENC_KEY", raising=False)
+    monkeypatch.delenv("CARDIO_REQUIRE_ENC_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="encryption key missing"):
+        crypto._load_key()
+    assert not key_path.exists(), "must not replace a key used for stored credentials"
+
+
+def test_missing_key_without_credentials_can_initialize(tmp_path, monkeypatch):
+    db = tmp_path / "empty.sqlite"
+    make_db(db, [])
+    key_path = tmp_path / ".enc_key"
+    monkeypatch.setattr(crypto, "_KEY_PATH", key_path)
+    monkeypatch.setattr(crypto.config, "DB_PATH", str(db))
+    monkeypatch.delenv("CARDIO_ENC_KEY", raising=False)
+    monkeypatch.delenv("CARDIO_REQUIRE_ENC_KEY", raising=False)
+
+    generated = crypto._load_key()
+    assert Fernet(generated)
+    assert key_path.read_bytes() == generated
