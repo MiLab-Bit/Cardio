@@ -12,9 +12,9 @@ from contextvars import ContextVar
 from typing import AsyncIterator
 
 from openai import AsyncOpenAI
-from .gateway import Gateway, QuotaExceeded
 
 from . import config
+from .gateway import Gateway, QuotaExceeded
 
 # 向后兼容别名（Gateway 超限抛 QuotaExceeded）
 LLMQuotaExceeded = QuotaExceeded

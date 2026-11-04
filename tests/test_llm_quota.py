@@ -18,9 +18,8 @@ import pytest
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO)
 
-from cardio.gateway import _SqliteCache, QuotaGate  # noqa: E402
-
 from cardio import llm  # noqa: E402
+from cardio.gateway import QuotaGate, _SqliteCache  # noqa: E402
 
 
 class _Resp:
