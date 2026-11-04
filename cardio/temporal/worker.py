@@ -1,6 +1,7 @@
 """Standalone Cardio Temporal worker (no OpenClaw runtime dependency).
 
-The FastAPI /api/analyze endpoint dispatches to this worker via Temporal.\nNo plaintext BYOK credential enters Workflow or Activity arguments.
+The FastAPI /api/analyze endpoint dispatches to this worker via Temporal.
+No plaintext BYOK credential enters Workflow or Activity arguments.
 """
 from __future__ import annotations
 
@@ -14,10 +15,10 @@ from temporalio.worker import Worker
 from cardio.temporal.activities import (
     critique_activity,
     extraction_activity,
+    persist_analysis_activity,
     research_activity,
     strategy_activity,
     synthesis_activity,
-    persist_analysis_activity,
 )
 from cardio.temporal.workflows.analyze import CardioAnalyzeWorkflow
 
