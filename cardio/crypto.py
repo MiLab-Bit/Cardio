@@ -20,11 +20,24 @@ def _load_key() -> bytes:
     env = os.environ.get("CARDIO_ENC_KEY")
     if env:
         return env.encode("utf-8") if isinstance(env, str) else env
+    if os.getenv("CARDIO_REQUIRE_ENC_KEY", "").lower() in ("1", "true", "yes"):
+        raise RuntimeError(
+            "CARDIO_ENC_KEY is required for this deployment; "
+            "refusing to silently generate a different decryption key"
+        )
     if _KEY_PATH.exists():
         return _KEY_PATH.read_bytes().strip()
+
     key = Fernet.generate_key()
-    _KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _KEY_PATH.write_bytes(key)
+    _KEY_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        # Never create a tracked or world-readable key; exclusive creation also
+        # protects concurrent API/worker startup from silently changing keys.
+        fd = os.open(_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return _KEY_PATH.read_bytes().strip()
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(key)
     return key
 
 
