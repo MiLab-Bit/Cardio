@@ -1,7 +1,9 @@
 """Runtime boundary regressions: quota isolation, fail-closed accounting, JSON parsing."""
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,3 +55,62 @@ def test_simultaneous_calls_do_not_exceed_daily_limit(tmp_path):
 def test_temporal_worker_imports_without_openclaw_shared_runtime():
     from cardio.temporal.worker import _run
     assert callable(_run)
+
+
+
+def test_live_streams_hold_semaphore_and_close_clients(tmp_path):
+    async def scenario():
+        gateway = Gateway(
+            platform_base_url="http://127.0.0.1:9/v1",
+            platform_api_key="offline-test",
+            default_model="mock",
+            quota_db=str(tmp_path / "quota.sqlite"),
+            cache_db=str(tmp_path / "cache.sqlite"),
+            max_concurrency=1,
+        )
+        gateway._quota.limit = None
+        reached_first = asyncio.Event()
+        release = asyncio.Event()
+        started = []
+        closed = []
+
+        class Client:
+            def __init__(self):
+                self.chat = SimpleNamespace(
+                    completions=SimpleNamespace(create=self.create)
+                )
+
+            async def create(self, **kw):
+                started.append(kw["model"])
+                reached_first.set()
+
+                async def chunks():
+                    yield SimpleNamespace(choices=[
+                        SimpleNamespace(delta=SimpleNamespace(content="x"))
+                    ])
+                    await release.wait()
+
+                return chunks()
+
+            async def close(self):
+                closed.append(True)
+
+        gateway._client = lambda base, key: Client()
+
+        async def collect(text):
+            stream = await gateway.chat(
+                [{"role": "user", "content": text}], stream=True, scope="test"
+            )
+            return [token async for token in stream]
+
+        first = asyncio.create_task(collect("one"))
+        await reached_first.wait()
+        second = asyncio.create_task(collect("two"))
+        await asyncio.sleep(0.02)
+        assert started == ["mock"], "second stream bypassed concurrency limit"
+        release.set()
+        results = await asyncio.gather(first, second)
+        assert results == [["x"], ["x"]]
+        assert len(started) == len(closed) == 2
+
+    asyncio.run(scenario())
